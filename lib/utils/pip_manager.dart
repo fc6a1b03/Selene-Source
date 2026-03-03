@@ -105,6 +105,13 @@ class PipManager {
 
   /// 检查是否支持 PiP
   Future<bool> isSupported() async {
+    // 确保已初始化
+    if (Platform.isAndroid && _floatingAndroid == null) {
+      await _initializeAndroid();
+    } else if (Platform.isIOS && _pipIOS == null) {
+      await _initializeIOS();
+    }
+
     if (Platform.isAndroid) {
       return _floatingAndroid?.isPipAvailable ?? false;
     } else if (Platform.isIOS) {
@@ -145,6 +152,13 @@ class PipManager {
 
   /// 进入 PiP 模式（手动调用）
   Future<bool> enterPipMode() async {
+    // 确保已初始化
+    if (Platform.isAndroid && _floatingAndroid == null) {
+      await _initializeAndroid();
+    } else if (Platform.isIOS && _pipIOS == null) {
+      await _initializeIOS();
+    }
+
     if (Platform.isAndroid) {
       // Android: 使用 ImmediatePiP 立即进入 PiP
       final status = await _floatingAndroid?.enable(

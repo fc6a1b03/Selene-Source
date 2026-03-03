@@ -1,36 +1,60 @@
 // 通用图片地址处理工具
 import 'package:selene/services/user_data_service.dart';
 
+/// 图片 URL 缓存
+final Map<String, String> _imageUrlCache = {};
+
 /// 根据来源处理图片 URL（例如豆瓣域名替换）。
 /// - [originalUrl]: 原始图片地址
 /// - [source]: 数据来源（如 'douban'、'bangumi' 等）
 /// 返回可直接用于加载的图片地址。
+///
+/// 优化：使用缓存避免重复计算
 Future<String> getImageUrl(String originalUrl, String? source) async {
-  if (source == 'douban' && originalUrl.isNotEmpty) {
-    final imageSourceKey = await UserDataService.getDoubanImageSourceKey();
+  // 空 URL 直接返回
+  if (originalUrl.isEmpty) return originalUrl;
 
-    switch (imageSourceKey) {
-      case 'official_cdn':
-        return originalUrl.replaceAll(
-          RegExp(r'img\d+\.doubanio\.com'),
-          'img3.doubanio.com',
-        );
-      case 'cdn_tencent':
-        return originalUrl.replaceAll(
-          RegExp(r'img\d+\.doubanio\.com'),
-          'img.doubanio.cmliussss.net',
-        );
-      case 'cdn_aliyun':
-        return originalUrl.replaceAll(
-          RegExp(r'img\d+\.doubanio\.com'),
-          'img.doubanio.cmliussss.com',
-        );
-      case 'direct':
-      default:
-        return originalUrl;
-    }
+  // 非豆瓣来源直接返回
+  if (source != 'douban') return originalUrl;
+
+  // 检查缓存
+  final cacheKey = '${source}_$originalUrl';
+  if (_imageUrlCache.containsKey(cacheKey)) {
+    return _imageUrlCache[cacheKey]!;
   }
-  return originalUrl;
+
+  // 处理 URL
+  final imageSourceKey = await UserDataService.getDoubanImageSourceKey();
+  String result;
+
+  switch (imageSourceKey) {
+    case 'official_cdn':
+      result = originalUrl.replaceAll(
+        RegExp(r'img\d+\.doubanio\.com'),
+        'img3.doubanio.com',
+      );
+    case 'cdn_tencent':
+      result = originalUrl.replaceAll(
+        RegExp(r'img\d+\.doubanio\.com'),
+        'img.doubanio.cmliussss.net',
+      );
+    case 'cdn_aliyun':
+      result = originalUrl.replaceAll(
+        RegExp(r'img\d+\.doubanio\.com'),
+        'img.doubanio.cmliussss.com',
+      );
+    case 'direct':
+    default:
+      result = originalUrl;
+  }
+
+  // 保存到缓存（限制缓存大小）
+  if (_imageUrlCache.length > 1000) {
+    _imageUrlCache.clear();
+  }
+  _imageUrlCache[cacheKey] = result;
+
+  return result;
 }
 
 /// 返回加载网络图片所需的 HTTP 头（主要用于绕过特定站点的反盗链）。

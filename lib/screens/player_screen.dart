@@ -11,6 +11,7 @@ import 'package:selene/models/play_record.dart';
 import 'package:selene/models/search_result.dart';
 import 'package:selene/services/api_service.dart';
 import 'package:selene/services/douban_service.dart';
+import 'package:selene/services/global_player_manager.dart';
 import 'package:selene/services/m3u8_service.dart';
 import 'package:selene/services/page_cache_service.dart';
 import 'package:selene/services/search_service.dart';
@@ -1127,6 +1128,15 @@ class _PlayerScreenState extends State<PlayerScreen>
                 isPC ? VideoPlayerSurface.desktop : VideoPlayerSurface.mobile,
             onBackPressed: _onBackPressed,
             onControllerCreated: (controller) {
+              // 先注册全局播放器，如果失败说明已有播放器在运行
+              final registered = _registerGlobalPlayer();
+              if (!registered) {
+                // 重复注册，释放这个新创建的控制器
+                debugPrint('PlayerScreen: 检测到重复播放器，释放新实例');
+                controller.pause();
+                controller.dispose();
+                return;
+              }
               _videoPlayerController = controller;
             },
             onReady: _onVideoPlayerReady,
@@ -2340,6 +2350,11 @@ class _PlayerScreenState extends State<PlayerScreen>
       // 静默处理错误
       debugPrint('测速失败: $e');
     } finally {
+      // 测速完成后，异步排序源列表（避免卡顿）
+      if (mounted) {
+        _sortSourcesBySpeed(stateSetter);
+      }
+
       // 清理测速服务
       _speedTestService?.dispose();
       _speedTestService = null;
@@ -2353,6 +2368,70 @@ class _PlayerScreenState extends State<PlayerScreen>
         _refreshAnimationController.reset();
       }
     }
+  }
+
+  /// 根据测速结果对源列表进行排序
+  /// 延迟执行避免阻塞UI主线程
+  /// [stateSetter] - 如果面板正在显示，传入面板的 setState 以同步更新面板
+  void _sortSourcesBySpeed([StateSetter? stateSetter]) {
+    if (allSourcesSpeed.isEmpty || allSources.isEmpty) return;
+
+    // 延迟到下一帧执行，避免阻塞当前UI渲染
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      // 复制当前列表进行排序
+      final sortedSources = List<SearchResult>.from(allSources);
+
+      // 对源进行排序：可用的按延迟排序，不可用排在最后
+      sortedSources.sort((a, b) {
+        final speedA = allSourcesSpeed['${a.source}_${a.id}'];
+        final speedB = allSourcesSpeed['${b.source}_${b.id}'];
+
+        // 解析延迟数值
+        int getLatency(SourceSpeed? speed) {
+          if (speed == null) return -1;
+          if (speed.quality == '超时' || speed.pingTime == '超时') return -1;
+          final numeric = speed.pingTime.replaceAll(RegExp(r'[^\d]'), '');
+          return int.tryParse(numeric) ?? -1;
+        }
+
+        final latencyA = getLatency(speedA);
+        final latencyB = getLatency(speedB);
+
+        // -1 表示未测试或不可用，排在最后
+        if (latencyA < 0 && latencyB < 0) return 0;
+        if (latencyA < 0) return 1;
+        if (latencyB < 0) return -1;
+
+        // 按延迟从小到大排序
+        return latencyA.compareTo(latencyB);
+      });
+
+      // 检查列表是否真的发生了变化
+      var hasChanged = false;
+      for (var i = 0; i < sortedSources.length; i++) {
+        final oldId = '${allSources[i].source}_${allSources[i].id}';
+        final newId = '${sortedSources[i].source}_${sortedSources[i].id}';
+        if (oldId != newId) {
+          hasChanged = true;
+          break;
+        }
+      }
+
+      // 只有顺序变化了才更新UI
+      if (hasChanged && mounted) {
+        // 更新主页面
+        setState(() {
+          allSources = sortedSources;
+        });
+
+        // 如果面板正在显示，同步更新面板
+        stateSetter?.call(() {});
+
+        debugPrint('源列表已按速度排序');
+      }
+    });
   }
 
   /// 构建错误覆盖层
@@ -2692,6 +2771,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   /// 停止播放器（确保音频立即停止）
   void _stopPlayer() {
+    // 先从全局管理器注销
+    GlobalPlayerManager.instance.unregisterPlayer(
+        playerId: 'PlayerScreen_${widget.id ?? widget.title}');
     // 直接使用底层播放器停止，不依赖异步等待
     try {
       _videoPlayerController?.pause();
@@ -2704,6 +2786,29 @@ class _PlayerScreenState extends State<PlayerScreen>
       debugPrint('销毁播放器失败: $e');
     }
     _videoPlayerController = null;
+  }
+
+  /// 注册到全局播放器管理器
+  /// 返回 true 表示注册成功，false 表示已有相同播放器在运行
+  bool _registerGlobalPlayer() {
+    return GlobalPlayerManager.instance.registerPlayer(
+      () {
+        // 同步释放播放器（用于全局管理器强制释放场景）
+        try {
+          _videoPlayerController?.pause();
+          _videoPlayerController?.dispose();
+        } catch (e) {
+          debugPrint('全局管理器释放播放器失败: $e');
+        }
+        _videoPlayerController = null;
+        debugPrint('视频播放器被全局管理器释放');
+        // 如果当前页面还在，需要退出
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
+      },
+      playerId: 'PlayerScreen_${widget.id ?? widget.title}',
+    );
   }
 
   @override
@@ -2788,28 +2893,12 @@ class _PlayerScreenState extends State<PlayerScreen>
     final topOffset = statusBarHeight + macOSPadding;
 
     if (_isWebFullscreen) {
-      // 网页全屏模式：播放器占据整个屏幕（保留顶部安全区域）
-      return Positioned(
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        child: Column(
-          children: [
-            // 顶部安全区域
-            Container(
-              height: topOffset,
-              color: Colors.black,
-            ),
-            // 播放器
-            Expanded(
-              child: ColoredBox(
-                key: _playerKey,
-                color: Colors.black,
-                child: _buildPlayerWidget(),
-              ),
-            ),
-          ],
+      // 完整全屏模式：播放器占据整个屏幕（包括状态栏区域）
+      return Positioned.fill(
+        child: ColoredBox(
+          key: _playerKey,
+          color: Colors.black,
+          child: _buildPlayerWidget(),
         ),
       );
     } else {

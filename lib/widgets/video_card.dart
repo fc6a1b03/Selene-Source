@@ -47,12 +47,31 @@ class VideoCard extends StatefulWidget {
 
 class _VideoCardState extends State<VideoCard> {
   bool _isHovered = false;
+  late Future<String> _imageUrlFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageUrlFuture =
+        getImageUrl(widget.videoInfo.cover, widget.videoInfo.source);
+  }
+
+  @override
+  void didUpdateWidget(VideoCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 只在封面或来源变化时重新获取
+    if (oldWidget.videoInfo.cover != widget.videoInfo.cover ||
+        oldWidget.videoInfo.source != widget.videoInfo.source) {
+      _imageUrlFuture =
+          getImageUrl(widget.videoInfo.cover, widget.videoInfo.source);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final isPC = DeviceUtils.isPC();
-    final themeService = Provider.of<ThemeService>(context);
-    final isDark = themeService.isDarkMode;
+    // 使用 Selector 只监听 isDarkMode，避免主题其他变化时重建
+    final isDark = context.select<ThemeService, bool>((s) => s.isDarkMode);
 
     // 卡片尺寸
     final width = widget.cardWidth ?? 140.0;
@@ -64,7 +83,7 @@ class _VideoCardState extends State<VideoCard> {
     final episodeText = shouldShowEpisodeInfo ? _getEpisodeText() : '';
 
     return FutureBuilder<String>(
-      future: getImageUrl(widget.videoInfo.cover, widget.videoInfo.source),
+      future: _imageUrlFuture,
       builder: (context, snapshot) {
         final imageUrl = snapshot.data ?? widget.videoInfo.cover;
         final headers =
@@ -205,17 +224,29 @@ class _VideoCardState extends State<VideoCard> {
     );
   }
 
-  /// 构建图片
+  /// 构建图片 - 优化版本，添加内存缓存限制
   Widget _buildImage({
     required String imageUrl,
     required Map<String, String>? headers,
     required bool isDark,
   }) {
+    // 计算合适的缓存尺寸
+    final width = widget.cardWidth ?? 140.0;
+    final height = width * 1.4;
+
+    // 限制缓存尺寸，避免内存占用过大
+    // 使用物理像素尺寸，考虑 2x 和 3x 设备
+    final cacheWidth = (width * 3).toInt();
+    final cacheHeight = (height * 3).toInt();
+
     return CachedNetworkImage(
       imageUrl: imageUrl,
       fit: BoxFit.cover,
       cacheKey: imageUrl,
       httpHeaders: headers,
+      // 限制内存缓存大小
+      memCacheWidth: cacheWidth,
+      memCacheHeight: cacheHeight,
       placeholder: (context, url) => ShimmerAnimation(
         child: Container(
           color: isDark ? AppColors.darkElevated : AppColors.lightElevated,

@@ -13,6 +13,7 @@ import 'package:selene/screens/tv_screen.dart';
 import 'package:selene/services/page_cache_service.dart';
 import 'package:selene/services/version_service.dart';
 import 'package:selene/utils/font_utils.dart';
+import 'package:selene/utils/route_animations.dart';
 import 'package:selene/widgets/bangumi_section.dart';
 import 'package:selene/widgets/continue_watching_section.dart';
 import 'package:selene/widgets/custom_refresh_indicator.dart';
@@ -489,30 +490,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// 处理点击搜索按钮
   void _onSearchTap() {
-    if (Platform.isIOS) {
-      Navigator.push(
-        context,
-        MaterialPageRoute<void>(
-          builder: (context) => const SearchScreen(),
-        ),
-      ).then((_) {
-        // 从搜索页面返回时刷新数据
-        _refreshOnResume();
-      });
-    } else {
-      Navigator.push(
-        context,
-        PageRouteBuilder<void>(
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              const SearchScreen(),
-          transitionDuration: Duration.zero, // 无打开动画
-          reverseTransitionDuration: Duration.zero, // 无关闭动画
-        ),
-      ).then((_) {
-        // 从搜索页面返回时刷新数据
-        _refreshOnResume();
-      });
-    }
+    // iOS 使用原生风格动画，其他平台使用淡入淡出
+    final Route<void> route = Platform.isIOS
+        ? RouteAnimations.fade<void>(const SearchScreen())
+        : RouteAnimations.noAnimation<void>(const SearchScreen());
+
+    Navigator.push<void>(
+      context,
+      route,
+    ).then((_) {
+      // 从搜索页面返回时刷新数据
+      _refreshOnResume();
+    });
   }
 
   /// 处理点击 Selene 标题跳转到首页
@@ -699,9 +688,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// 跳转到播放页的通用方法
   Future<void> _navigateToPlayer(Widget playerScreen) async {
-    await Navigator.push(
+    // 使用优化的页面路由
+    await Navigator.push<void>(
       context,
-      MaterialPageRoute<void>(builder: (context) => playerScreen),
+      OptimizedPageRoute<void>(builder: (context) => playerScreen),
     );
 
     await _refreshOnResume();

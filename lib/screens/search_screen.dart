@@ -50,7 +50,6 @@ class _SearchScreenState extends State<SearchScreen>
   bool _hasReceivedStart = false;
   String? _searchError;
   SearchProgress? _searchProgress;
-  Timer? _updateTimer;
   bool _useAggregatedView = true;
 
   // 筛选和排序状态
@@ -75,7 +74,24 @@ class _SearchScreenState extends State<SearchScreen>
   StreamSubscription<SearchProgress>? _progressSubscription;
   StreamSubscription<String>? _errorSubscription;
 
+  // 缓存过滤结果
+  List<SearchResult>? _cachedFilteredResults;
+  String? _lastFilterCacheKey;
+
+  /// 生成缓存键
+  String _generateFilterCacheKey() {
+    return '${_searchResults.length}_${_selectedSource}_${_selectedYear}_${_selectedTitle}_${_yearSortOrder.index}';
+  }
+
   List<SearchResult> get _filteredSearchResults {
+    final currentKey = _generateFilterCacheKey();
+
+    // 如果缓存有效，直接返回缓存结果
+    if (_cachedFilteredResults != null && _lastFilterCacheKey == currentKey) {
+      return _cachedFilteredResults!;
+    }
+
+    // 计算过滤结果
     List<SearchResult> results = List.from(_searchResults);
 
     // Source filter
@@ -93,34 +109,41 @@ class _SearchScreenState extends State<SearchScreen>
       results = results.where((r) => r.title == _selectedTitle).toList();
     }
 
-    // Year sort
-    if (_yearSortOrder != SortOrder.none) {
+    // Year sort - 使用更高效的排序
+    if (_yearSortOrder != SortOrder.none && results.length > 1) {
+      // 预解析年份，避免重复解析
+      final parsedYears = <SearchResult, int?>{};
+      for (final r in results) {
+        parsedYears[r] = int.tryParse(r.year);
+      }
+
       results.sort((a, b) {
-        final yearAIsNum = int.tryParse(a.year) != null;
-        final yearBIsNum = int.tryParse(b.year) != null;
+        final yearA = parsedYears[a];
+        final yearB = parsedYears[b];
 
-        if (yearAIsNum && !yearBIsNum) {
-          return -1;
-        }
-        if (!yearAIsNum && yearBIsNum) {
-          return 1;
-        }
-        if (!yearAIsNum && !yearBIsNum) {
-          return 0;
-        }
-
-        final yearA = int.parse(a.year);
-        final yearB = int.parse(b.year);
+        if (yearA != null && yearB == null) return -1;
+        if (yearA == null && yearB != null) return 1;
+        if (yearA == null && yearB == null) return 0;
 
         if (_yearSortOrder == SortOrder.desc) {
-          return yearB.compareTo(yearA);
+          return yearB!.compareTo(yearA!);
         } else {
-          return yearA.compareTo(yearB);
+          return yearA!.compareTo(yearB!);
         }
       });
     }
 
+    // 更新缓存
+    _cachedFilteredResults = results;
+    _lastFilterCacheKey = currentKey;
+
     return results;
+  }
+
+  /// 清除过滤缓存
+  void _clearFilterCache() {
+    _cachedFilteredResults = null;
+    _lastFilterCacheKey = null;
   }
 
   @override
@@ -167,10 +190,30 @@ class _SearchScreenState extends State<SearchScreen>
     _incrementalResultsSubscription?.cancel();
     _progressSubscription?.cancel();
     _errorSubscription?.cancel();
-    _updateTimer?.cancel();
+    _batchUpdateTimer?.cancel();
+    _batchUpdateTimer?.cancel();
     _searchService.dispose();
     _entranceController.dispose();
     super.dispose();
+  }
+
+  // 批量更新相关
+  final List<SearchResult> _pendingResults = [];
+  Timer? _batchUpdateTimer;
+  static const int _batchUpdateThreshold = 50; // 每50条更新一次
+  static const Duration _batchUpdateInterval =
+      Duration(milliseconds: 300); // 或每300ms更新一次
+
+  /// 批量更新结果到UI
+  void _flushPendingResults() {
+    if (!mounted || _pendingResults.isEmpty) return;
+
+    setState(() {
+      _searchResults.addAll(_pendingResults);
+      _pendingResults.clear();
+      // 清除过滤缓存，因为有新数据
+      _clearFilterCache();
+    });
   }
 
   /// 设置搜索监听器
@@ -178,22 +221,21 @@ class _SearchScreenState extends State<SearchScreen>
     _incrementalResultsSubscription?.cancel();
     _progressSubscription?.cancel();
     _errorSubscription?.cancel();
+    _batchUpdateTimer?.cancel();
+    _pendingResults.clear();
 
     _incrementalResultsSubscription =
         _searchService.incrementalResultsStream.listen((incrementalResults) {
       if (mounted && incrementalResults.isNotEmpty) {
-        _searchResults.addAll(incrementalResults);
+        _pendingResults.addAll(incrementalResults);
 
-        _updateTimer?.cancel();
-        _updateTimer = Timer(const Duration(milliseconds: 50), () {
-          if (mounted) {
-            scheduleMicrotask(() {
-              if (mounted) {
-                setState(() {});
-              }
-            });
-          }
-        });
+        // 批量更新策略：积累到一定数量或定时更新
+        if (_pendingResults.length >= _batchUpdateThreshold) {
+          _flushPendingResults();
+        } else {
+          _batchUpdateTimer?.cancel();
+          _batchUpdateTimer = Timer(_batchUpdateInterval, _flushPendingResults);
+        }
       }
     });
 
@@ -450,12 +492,17 @@ class _SearchScreenState extends State<SearchScreen>
   void _performSearch(String query) async {
     if (query.trim().isEmpty) return;
 
+    // 清除批量更新相关
+    _batchUpdateTimer?.cancel();
+    _pendingResults.clear();
+
     setState(() {
       _searchQuery = query.trim();
       _hasSearched = true;
       _hasReceivedStart = false;
       _searchError = null;
       _searchResults.clear();
+      _clearFilterCache(); // 清除过滤缓存
       _searchProgress = null;
       _useAggregatedView = true;
       _selectedSource = 'all';
@@ -488,9 +535,10 @@ class _SearchScreenState extends State<SearchScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<ThemeService>(
-      builder: (context, themeService, child) {
-        final isDark = themeService.isDarkMode;
+    // 使用 Selector 只监听 isDarkMode 变化，避免主题其他属性变化时重建
+    return Selector<ThemeService, bool>(
+      selector: (_, themeService) => themeService.isDarkMode,
+      builder: (context, isDark, child) {
         // 获取底部安全区域高度（适配虚拟导航栏）
         final bottomPadding = MediaQuery.of(context).padding.bottom;
 
@@ -552,12 +600,15 @@ class _SearchScreenState extends State<SearchScreen>
             _performSearch(value);
           },
           onClearSearch: () {
+            _batchUpdateTimer?.cancel();
+            _pendingResults.clear();
             setState(() {
               _searchQuery = '';
               _searchController.clear();
               _hasSearched = false;
               _hasReceivedStart = false;
               _searchResults.clear();
+              _clearFilterCache();
               _searchError = null;
               _searchProgress = null;
               _searchService.stopSearch();

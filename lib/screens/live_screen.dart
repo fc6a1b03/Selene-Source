@@ -116,6 +116,9 @@ class _LiveScreenState extends State<LiveScreen>
     } catch (e) {
       debugPrint('测速失败: $e');
     } finally {
+      // 测速完成后，对频道进行排序
+      _sortChannelsByLatency();
+
       setState(() {
         _isSpeedTesting = false;
       });
@@ -123,6 +126,74 @@ class _LiveScreenState extends State<LiveScreen>
       _speedTestService?.dispose();
       _speedTestService = null;
     }
+  }
+
+  /// 根据测速延迟对频道列表进行排序
+  /// 对每个分组内的频道分别排序
+  void _sortChannelsByLatency() {
+    if (_channelLatency.isEmpty || _channelGroups.isEmpty) return;
+
+    // 延迟到下一帧执行，避免阻塞当前UI渲染
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      // 对每个分组内的频道进行排序
+      final sortedGroups = <LiveChannelGroup>[];
+
+      for (final group in _channelGroups) {
+        // 复制当前分组的频道列表进行排序
+        final sortedChannels = List<LiveChannel>.from(group.channels);
+
+        // 对频道进行排序：可用的按延迟排序，不可用排在最后
+        sortedChannels.sort((a, b) {
+          final latencyA = _channelLatency[a.id] ?? -1;
+          final latencyB = _channelLatency[b.id] ?? -1;
+
+          // -1 表示未测试或不可用，排在最后
+          if (latencyA < 0 && latencyB < 0) return 0;
+          if (latencyA < 0) return 1;
+          if (latencyB < 0) return -1;
+
+          // 按延迟从小到大排序
+          return latencyA.compareTo(latencyB);
+        });
+
+        // 创建新的分组对象（保持分组名称，更新频道顺序）
+        sortedGroups.add(LiveChannelGroup(
+          name: group.name,
+          channels: sortedChannels,
+        ));
+      }
+
+      // 检查列表是否真的发生了变化
+      var hasChanged = false;
+      for (var i = 0; i < sortedGroups.length; i++) {
+        final oldChannels = _channelGroups[i].channels;
+        final newChannels = sortedGroups[i].channels;
+
+        if (oldChannels.length != newChannels.length) {
+          hasChanged = true;
+          break;
+        }
+
+        for (var j = 0; j < oldChannels.length; j++) {
+          if (oldChannels[j].id != newChannels[j].id) {
+            hasChanged = true;
+            break;
+          }
+        }
+
+        if (hasChanged) break;
+      }
+
+      // 只有顺序变化了才更新UI
+      if (hasChanged && mounted) {
+        setState(() {
+          _channelGroups = sortedGroups;
+        });
+        debugPrint('直播频道列表已按延迟排序');
+      }
+    });
   }
 
   void _scrollToTop() {
@@ -342,19 +413,21 @@ class _LiveScreenState extends State<LiveScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<ThemeService>(
-      builder: (context, themeService, child) {
+    // 使用 Selector 只监听 isDarkMode 变化
+    return Selector<ThemeService, bool>(
+      selector: (_, themeService) => themeService.isDarkMode,
+      builder: (context, isDarkMode, child) {
         return Column(
           children: [
-            _buildTopBar(themeService),
+            _buildTopBar(isDarkMode),
             Expanded(
               child: _isRefreshing
-                  ? _buildRefreshingView(themeService)
+                  ? _buildRefreshingView(isDarkMode)
                   : _isLoading
-                      ? _buildLoadingView(themeService)
+                      ? _buildLoadingView(isDarkMode)
                       : _errorMessage != null
-                          ? _buildErrorView(themeService)
-                          : _buildChannelList(themeService),
+                          ? _buildErrorView(isDarkMode)
+                          : _buildChannelList(isDarkMode),
             ),
           ],
         );
@@ -362,7 +435,7 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 
-  Widget _buildTopBar(ThemeService themeService) {
+  Widget _buildTopBar(bool isDarkMode) {
     final allGroups = ['全部', ..._channelGroups.map((g) => g.name)];
 
     // 构建分组选项
@@ -401,7 +474,7 @@ class _LiveScreenState extends State<LiveScreen>
                 _loadChannels(source: source);
                 _scrollToTop();
               },
-              themeService,
+              isDarkMode,
             ),
             const SizedBox(width: 8),
           ],
@@ -417,12 +490,12 @@ class _LiveScreenState extends State<LiveScreen>
                 });
                 _scrollToTop();
               },
-              themeService,
+              isDarkMode,
             ),
           const Spacer(),
           // 测速按钮
           if (!_isInitialLoad && _channelGroups.isNotEmpty)
-            _buildSpeedTestButton(themeService),
+            _buildSpeedTestButton(isDarkMode),
           // 刷新按钮
           Padding(
             padding: const EdgeInsets.only(right: 4),
@@ -460,7 +533,7 @@ class _LiveScreenState extends State<LiveScreen>
                             ? const Color(0xFF27ae60)
                             : (DeviceUtils.isPC() && _isRefreshButtonHovered
                                 ? const Color(0xFF27ae60)
-                                : (themeService.isDarkMode
+                                : (isDarkMode
                                     ? Colors.grey[600]
                                     : Colors.grey[500])),
                       ),
@@ -476,7 +549,7 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   /// 构建测速按钮
-  Widget _buildSpeedTestButton(ThemeService themeService) {
+  Widget _buildSpeedTestButton(bool isDarkMode) {
     return MouseRegion(
       cursor: DeviceUtils.isPC() && !_isSpeedTesting
           ? SystemMouseCursors.click
@@ -499,9 +572,7 @@ class _LiveScreenState extends State<LiveScreen>
                   ? const Color(0xFF27ae60)
                   : (_channelAvailability.isNotEmpty
                       ? const Color(0xFF3498db)
-                      : (themeService.isDarkMode
-                          ? Colors.grey[600]!
-                          : Colors.grey[400]!)),
+                      : (isDarkMode ? Colors.grey[600]! : Colors.grey[400]!)),
             ),
           ),
           child: Row(
@@ -524,7 +595,7 @@ class _LiveScreenState extends State<LiveScreen>
                         size: 16,
                         color: _channelAvailability.isNotEmpty
                             ? const Color(0xFF3498db)
-                            : (themeService.isDarkMode
+                            : (isDarkMode
                                 ? Colors.grey[500]
                                 : Colors.grey[600]),
                       ),
@@ -540,9 +611,7 @@ class _LiveScreenState extends State<LiveScreen>
                       ? const Color(0xFF27ae60)
                       : (_channelAvailability.isNotEmpty
                           ? const Color(0xFF3498db)
-                          : (themeService.isDarkMode
-                              ? Colors.grey[500]
-                              : Colors.grey[600])),
+                          : (isDarkMode ? Colors.grey[500] : Colors.grey[600])),
                 ),
               ),
             ],
@@ -557,7 +626,7 @@ class _LiveScreenState extends State<LiveScreen>
     List<SelectorOption> options,
     String selectedValue,
     ValueChanged<String> onSelected,
-    ThemeService themeService,
+    bool isDarkMode,
   ) {
     final selectedOption = options.firstWhere(
       (e) => e.value == selectedValue,
@@ -689,10 +758,10 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  Widget _buildLoadingView(ThemeService themeService) {
+  Widget _buildLoadingView(bool isDarkMode) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        gradient: themeService.isDarkMode
+        gradient: isDarkMode
             ? AppColors.darkBackgroundGradient
             : AppColors.lightBackgroundGradient,
       ),
@@ -700,16 +769,16 @@ class _LiveScreenState extends State<LiveScreen>
         child: ModernLoadingAnimation(
           message: '加载中',
           subMessage: '正在获取直播频道',
-          isDarkMode: themeService.isDarkMode,
+          isDarkMode: isDarkMode,
         ),
       ),
     );
   }
 
-  Widget _buildRefreshingView(ThemeService themeService) {
+  Widget _buildRefreshingView(bool isDarkMode) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        gradient: themeService.isDarkMode
+        gradient: isDarkMode
             ? AppColors.darkBackgroundGradient
             : AppColors.lightBackgroundGradient,
       ),
@@ -717,13 +786,13 @@ class _LiveScreenState extends State<LiveScreen>
         child: ModernLoadingAnimation(
           message: '刷新中',
           subMessage: '正在更新直播频道数据',
-          isDarkMode: themeService.isDarkMode,
+          isDarkMode: isDarkMode,
         ),
       ),
     );
   }
 
-  Widget _buildErrorView(ThemeService themeService) {
+  Widget _buildErrorView(bool isDarkMode) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -731,15 +800,14 @@ class _LiveScreenState extends State<LiveScreen>
           Icon(
             Icons.error_outline,
             size: 64,
-            color: themeService.isDarkMode
-                ? const Color(0xFF666666)
-                : const Color(0xFF95a5a6),
+            color:
+                isDarkMode ? const Color(0xFF666666) : const Color(0xFF95a5a6),
           ),
           const SizedBox(height: 16),
           Text(
             _errorMessage ?? '加载失败',
             style: FontUtils.poppins(
-              color: themeService.isDarkMode
+              color: isDarkMode
                   ? const Color(0xFFb0b0b0)
                   : const Color(0xFF7f8c8d),
             ),
@@ -763,7 +831,7 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 
-  Widget _buildChannelList(ThemeService themeService) {
+  Widget _buildChannelList(bool isDarkMode) {
     final channels = _getFilteredChannels();
 
     if (channels.isEmpty) {
@@ -771,9 +839,8 @@ class _LiveScreenState extends State<LiveScreen>
         child: Text(
           '暂无频道',
           style: FontUtils.poppins(
-            color: themeService.isDarkMode
-                ? const Color(0xFFb0b0b0)
-                : const Color(0xFF7f8c8d),
+            color:
+                isDarkMode ? const Color(0xFFb0b0b0) : const Color(0xFF7f8c8d),
           ),
         ),
       );
@@ -785,6 +852,8 @@ class _LiveScreenState extends State<LiveScreen>
 
     return GridView.builder(
       controller: _scrollController,
+      cacheExtent: 200,
+      // 增加预加载范围
       padding: const EdgeInsets.all(16),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: crossAxisCount,
@@ -794,19 +863,19 @@ class _LiveScreenState extends State<LiveScreen>
       ),
       itemCount: channels.length,
       itemBuilder: (context, index) {
-        return _buildChannelCard(channels[index], themeService);
+        return _buildChannelCard(channels[index], isDarkMode);
       },
     );
   }
 
-  Widget _buildChannelCard(LiveChannel channel, ThemeService themeService) {
+  Widget _buildChannelCard(LiveChannel channel, bool isDarkMode) {
     // 获取测速结果
     final isAvailable = _channelAvailability[channel.id];
     final latencyMs = _channelLatency[channel.id];
 
     return _LiveChannelCard(
       channel: channel,
-      themeService: themeService,
+      isDarkMode: isDarkMode,
       onTap: () {
         Navigator.push(
           context,
@@ -824,7 +893,7 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 
-  Widget _buildChannelLogo(LiveChannel channel, ThemeService themeService) {
+  Widget _buildChannelLogo(LiveChannel channel, {required bool isDarkMode}) {
     // 如果有台标，显示台标
     if (channel.logo.isNotEmpty) {
       return Container(
@@ -832,43 +901,37 @@ class _LiveScreenState extends State<LiveScreen>
         height: double.infinity,
         padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: themeService.isDarkMode
-              ? const Color(0xFF2a2a2a)
-              : const Color(0xFFc0c0c0),
+          color: isDarkMode ? const Color(0xFF2a2a2a) : const Color(0xFFc0c0c0),
         ),
         child: Image.network(
           channel.logo,
           fit: BoxFit.contain,
           errorBuilder: (context, error, stackTrace) {
-            return _buildDefaultPreview(themeService);
+            return _buildDefaultPreview(isDarkMode);
           },
           loadingBuilder: (context, child, loadingProgress) {
             if (loadingProgress == null) return child;
-            return _buildDefaultPreview(themeService);
+            return _buildDefaultPreview(isDarkMode);
           },
         ),
       );
     }
     // 没有台标，显示默认图标
-    return _buildDefaultPreview(themeService);
+    return _buildDefaultPreview(isDarkMode);
   }
 
-  Widget _buildDefaultPreview(ThemeService themeService) {
+  Widget _buildDefaultPreview(bool isDarkMode) {
     return Container(
       width: double.infinity,
       height: double.infinity,
       decoration: BoxDecoration(
-        color: themeService.isDarkMode
-            ? const Color(0xFF2a2a2a)
-            : const Color(0xFFc0c0c0),
+        color: isDarkMode ? const Color(0xFF2a2a2a) : const Color(0xFFc0c0c0),
       ),
       child: Center(
         child: Icon(
           Icons.tv,
           size: 48,
-          color: themeService.isDarkMode
-              ? const Color(0xFF666666)
-              : const Color(0xFF95a5b0),
+          color: isDarkMode ? const Color(0xFF666666) : const Color(0xFF95a5b0),
         ),
       ),
     );
@@ -877,15 +940,16 @@ class _LiveScreenState extends State<LiveScreen>
 
 class _LiveChannelCard extends StatefulWidget {
   final LiveChannel channel;
-  final ThemeService themeService;
+  final bool isDarkMode;
   final VoidCallback onTap;
-  final Widget Function(LiveChannel, ThemeService) buildChannelLogo;
+  final Widget Function(LiveChannel, {required bool isDarkMode})
+      buildChannelLogo;
   final bool? isAvailable; // 测速结果：是否可用
   final int? latencyMs; // 测速结果：延迟毫秒
 
   const _LiveChannelCard({
     required this.channel,
-    required this.themeService,
+    required this.isDarkMode,
     required this.onTap,
     required this.buildChannelLogo,
     this.isAvailable,
@@ -936,9 +1000,7 @@ class _LiveChannelCardState extends State<_LiveChannelCard> {
           color: color,
           shape: BoxShape.circle,
           border: Border.all(
-            color: widget.themeService.isDarkMode
-                ? const Color(0xFF1e1e1e)
-                : Colors.white,
+            color: widget.isDarkMode ? const Color(0xFF1e1e1e) : Colors.white,
             width: 2,
           ),
           boxShadow: [
@@ -1007,7 +1069,7 @@ class _LiveChannelCardState extends State<_LiveChannelCard> {
                   aspectRatio: 2.0,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: widget.themeService.isDarkMode
+                      color: widget.isDarkMode
                           ? const Color(0xFF1e1e1e)
                           : Colors.white,
                       borderRadius: BorderRadius.circular(12),
@@ -1016,8 +1078,8 @@ class _LiveChannelCardState extends State<_LiveChannelCard> {
                       children: [
                         ClipRRect(
                           borderRadius: BorderRadius.circular(12),
-                          child: widget.buildChannelLogo(
-                              widget.channel, widget.themeService),
+                          child: widget.buildChannelLogo(widget.channel,
+                              isDarkMode: widget.isDarkMode),
                         ),
                         // 状态指示器
                         _buildStatusIndicator(),
@@ -1037,7 +1099,7 @@ class _LiveChannelCardState extends State<_LiveChannelCard> {
                   fontWeight: FontWeight.w500,
                   color: isPC && _isHovered
                       ? const Color(0xFF27ae60)
-                      : (widget.themeService.isDarkMode
+                      : (widget.isDarkMode
                           ? Colors.white
                           : const Color(0xFF2c3e50)),
                 ),

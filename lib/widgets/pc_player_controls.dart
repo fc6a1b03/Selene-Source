@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:bitsdojo_window/bitsdojo_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -372,8 +373,18 @@ class _PCPlayerControlsState extends State<PCPlayerControls> {
 
   void _toggleFullscreen() {
     if (_isFullscreen) {
+      // 退出全屏
+      if (Platform.isWindows) {
+        // Windows: 使用 bitsdojo_window 恢复窗口
+        appWindow.maximizeOrRestore();
+      }
       widget.state.exitFullscreen();
     } else {
+      // 进入全屏
+      if (Platform.isWindows) {
+        // Windows: 使用 bitsdojo_window 实现真正的全屏（覆盖任务栏）
+        appWindow.maximize();
+      }
       widget.state.enterFullscreen();
     }
   }
@@ -799,10 +810,12 @@ class _PCPlayerControlsState extends State<PCPlayerControls> {
                 ),
               ),
             ),
-            // 顶部投屏按钮
+            // 顶部投屏按钮（非直播模式下在最左侧，直播模式下在中间）
             Positioned(
               top: effectiveFullscreen ? 8 : 4,
-              right: effectiveFullscreen ? 96.0 : 88.0,
+              right: effectiveFullscreen
+                  ? (widget.live ? 56.0 : 96.0)
+                  : (widget.live ? 48.0 : 88.0),
               child: AnimatedOpacity(
                 opacity: _controlsVisible ? 1.0 : 0.0,
                 duration: const Duration(milliseconds: 200),
@@ -822,12 +835,12 @@ class _PCPlayerControlsState extends State<PCPlayerControls> {
                 ),
               ),
             ),
-            // 顶部截图按钮（非直播模式下在投屏和下载之间，直播模式下在投屏右侧）
+            // 顶部截图按钮（非直播模式下在投屏和下载之间，直播模式下在最右侧）
             Positioned(
               top: effectiveFullscreen ? 8 : 4,
               right: effectiveFullscreen
-                  ? (widget.live ? 56.0 : 56.0)
-                  : (widget.live ? 48.0 : 48.0),
+                  ? (widget.live ? 16.0 : 56.0)
+                  : (widget.live ? 8.0 : 48.0),
               child: AnimatedOpacity(
                 opacity: _controlsVisible ? 1.0 : 0.0,
                 duration: const Duration(milliseconds: 200),

@@ -28,27 +28,24 @@ void main() async {
   HttpOverrides.global = CustomizeHttpOverrides();
   // 初始化 Flutter
   WidgetsFlutterBinding.ensureInitialized();
-  // 初始化 Hive
+
+  // 初始化 Hive - 必须在 runApp 前完成
   await HiveInitializer.init();
-  // 初始化 media_kit
+
+  // 初始化 media_kit - 必须在 runApp 前完成
   MediaKit.ensureInitialized();
-  // 初始化 macOS 窗口配置
+
+  // 初始化 macOS 窗口配置 - 必须在 runApp 前完成
   if (Platform.isMacOS) {
     await WindowManipulator.initialize(enableWindowDelegate: true);
-    // 设置标题栏为透明，让菜单栏颜色跟随主题
     await WindowManipulator.makeTitlebarTransparent();
     await WindowManipulator.enableFullSizeContentView();
-    // 隐藏标题栏中的 Title
     await WindowManipulator.hideTitle();
   }
-  // 初始化豆瓣缓存服务
-  final cacheService = DoubanCacheService();
-  await cacheService.init();
-  // 启动定期清理
-  cacheService.startPeriodicCleanup();
-  //
+
   runApp(const SeleneApp());
-  // 初始化 Windows 窗口配置
+
+  // Windows 窗口配置 - 可以在 runApp 后
   if (Platform.isWindows) {
     doWhenWindowReady(() {
       final win = appWindow;
@@ -60,6 +57,18 @@ void main() async {
       win.show();
     });
   }
+
+  // 延迟初始化非关键服务，避免阻塞启动
+  await Future<void>.delayed(Duration.zero);
+  _initializeDeferredServices();
+}
+
+/// 延迟初始化非关键服务
+void _initializeDeferredServices() async {
+  // 初始化豆瓣缓存服务 - 延迟执行
+  final cacheService = DoubanCacheService();
+  await cacheService.init();
+  cacheService.startPeriodicCleanup();
 }
 
 // 主应用程序组件
@@ -70,14 +79,19 @@ class SeleneApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (context) => ThemeService(),
-      child: Consumer<ThemeService>(
-        builder: (context, themeService, child) {
+      // 使用 Selector 只监听 themeMode 变化
+      child: Selector<ThemeService, ThemeMode>(
+        selector: (_, themeService) => themeService.themeMode,
+        builder: (context, themeMode, child) {
+          // 通过 Provider.of 获取主题数据（不监听，避免主题数据变化时重建）
+          final themeService =
+              Provider.of<ThemeService>(context, listen: false);
           return MaterialApp(
             title: 'Selene',
             debugShowCheckedModeBanner: false,
             theme: themeService.lightTheme,
             darkTheme: themeService.darkTheme,
-            themeMode: themeService.themeMode,
+            themeMode: themeMode,
             home: const AppWrapper(),
             builder: (context, child) {
               // 为 Windows 平台改善字体渲染
@@ -202,12 +216,14 @@ class _AppWrapperState extends State<AppWrapper> {
   @override
   Widget build(BuildContext context) {
     if (_isLoading) {
-      return Consumer<ThemeService>(
-        builder: (context, themeService, child) {
+      // 使用 Selector 只监听 isDarkMode 变化
+      return Selector<ThemeService, bool>(
+        selector: (_, themeService) => themeService.isDarkMode,
+        builder: (context, isDarkMode, child) {
           return Scaffold(
             body: DecoratedBox(
               decoration: BoxDecoration(
-                gradient: themeService.isDarkMode
+                gradient: isDarkMode
                     ? AppColors.darkBackgroundGradient
                     : AppColors.lightBackgroundGradient,
               ),
@@ -215,7 +231,7 @@ class _AppWrapperState extends State<AppWrapper> {
                 child: ModernLoadingAnimation(
                   message: '正在检查登录状态',
                   subMessage: '请稍候',
-                  isDarkMode: themeService.isDarkMode,
+                  isDarkMode: isDarkMode,
                   size: 160,
                 ),
               ),

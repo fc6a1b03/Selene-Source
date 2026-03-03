@@ -1405,7 +1405,11 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
                   GestureDetector(
                     onTap: () async {
                       _onUserInteraction();
-                      await _enterPipMode();
+                      try {
+                        await _enterPipMode();
+                      } catch (e) {
+                        debugPrint('Failed to enter PiP mode: $e');
+                      }
                     },
                     behavior: HitTestBehavior.opaque,
                     child: Container(

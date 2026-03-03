@@ -869,109 +869,113 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
 
   @override
   Widget build(BuildContext context) {
-    return ColoredBox(
-      color: Colors.black,
-      child: _isInitialized && _videoController != null
-          ? ValueListenableBuilder<BoxFit>(
-              valueListenable: _videoFit,
-              builder: (context, videoFit, _) {
-                final needsPadding = !_isCurrentlyFullscreen &&
-                    (videoFit == BoxFit.cover || videoFit == BoxFit.scaleDown);
-                final videoWidget = Video(
-                  controller: _videoController!,
-                  fit: videoFit,
-                  // 自定义全屏回调，覆盖默认的横屏强制设置
-                  onEnterFullscreen: () async {
-                    // 仅隐藏系统UI，不设置方向（方向由 MobilePlayerControls 控制）
-                    await SystemChrome.setEnabledSystemUIMode(
-                      SystemUiMode.immersiveSticky,
-                      overlays: [],
-                    );
-                  },
-                  onExitFullscreen: () async {
-                    // 恢复系统UI
-                    await SystemChrome.setEnabledSystemUIMode(
-                      SystemUiMode.manual,
-                      overlays: SystemUiOverlay.values,
-                    );
-                  },
-                  controls: (state) {
-                    return widget.surface == VideoPlayerSurface.desktop
-                        ? PCPlayerControls(
-                            state: state,
-                            player: _player!,
-                            onBackPressed: widget.onBackPressed,
-                            onNextEpisode: widget.onNextEpisode,
-                            onPause: widget.onPause,
-                            videoUrl: _currentUrl ?? '',
-                            isLastEpisode: widget.isLastEpisode,
-                            isLoadingVideo: _isLoadingVideo,
-                            onCastStarted: widget.onCastStarted,
-                            videoTitle: widget.videoTitle,
-                            currentEpisodeIndex: widget.currentEpisodeIndex,
-                            totalEpisodes: widget.totalEpisodes,
-                            sourceName: widget.sourceName,
-                            onWebFullscreenChanged:
-                                widget.onWebFullscreenChanged,
-                            onExitWebFullscreenCallbackReady: (callback) {
-                              _exitWebFullscreenCallback = callback;
-                            },
-                            onExitFullScreen: widget.onExitFullScreen,
-                            live: widget.live,
-                            playbackSpeedListenable: _playbackSpeed,
-                            onSetSpeed: _setPlaybackSpeed,
-                            downloadInfo: _downloadInfo,
-                            onStartDownload: _startDownload,
-                            onCancelDownload: _cancelDownload,
-                            onSaveAs: _saveAs,
-                          )
-                        : MobilePlayerControls(
-                            player: _player!,
-                            state: state,
-                            onControlsVisibilityChanged: (_) {},
-                            onBackPressed: widget.onBackPressed,
-                            onFullscreenChange: (isFullscreen) {
-                              _isCurrentlyFullscreen = isFullscreen;
-                              _updateVideoFitMode();
-                            },
-                            onNextEpisode: widget.onNextEpisode,
-                            onPause: widget.onPause,
-                            videoUrl: _currentUrl ?? '',
-                            isLastEpisode: widget.isLastEpisode,
-                            isLoadingVideo: _isLoadingVideo,
-                            onCastStarted: widget.onCastStarted,
-                            videoTitle: widget.videoTitle,
-                            currentEpisodeIndex: widget.currentEpisodeIndex,
-                            totalEpisodes: widget.totalEpisodes,
-                            sourceName: widget.sourceName,
-                            onExitFullScreen: widget.onExitFullScreen,
-                            live: widget.live,
-                            playbackSpeedListenable: _playbackSpeed,
-                            onSetSpeed: _setPlaybackSpeed,
-                            onEnterPipMode: _enterPipMode,
-                            isPipMode: _isPipMode,
-                            onExitPip: _exitPipMode,
-                            downloadInfo: _downloadInfo,
-                            onStartDownload: _startDownload,
-                            onCancelDownload: _cancelDownload,
-                            onSaveAs: _saveAs,
-                          );
-                  },
-                );
-                return needsPadding
-                    ? Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: videoWidget,
-                      )
-                    : videoWidget;
-              },
-            )
-          : const Center(
-              child: VideoLoadingIndicator(
-                size: 48,
-                color: Colors.white,
+    // 使用 RepaintBoundary 隔离视频播放器的重绘
+    return RepaintBoundary(
+      child: ColoredBox(
+        color: Colors.black,
+        child: _isInitialized && _videoController != null
+            ? ValueListenableBuilder<BoxFit>(
+                valueListenable: _videoFit,
+                builder: (context, videoFit, _) {
+                  final needsPadding = !_isCurrentlyFullscreen &&
+                      (videoFit == BoxFit.cover ||
+                          videoFit == BoxFit.scaleDown);
+                  final videoWidget = Video(
+                    controller: _videoController!,
+                    fit: videoFit,
+                    // 自定义全屏回调，覆盖默认的横屏强制设置
+                    onEnterFullscreen: () async {
+                      // 仅隐藏系统UI，不设置方向（方向由 MobilePlayerControls 控制）
+                      await SystemChrome.setEnabledSystemUIMode(
+                        SystemUiMode.immersiveSticky,
+                        overlays: [],
+                      );
+                    },
+                    onExitFullscreen: () async {
+                      // 恢复系统UI
+                      await SystemChrome.setEnabledSystemUIMode(
+                        SystemUiMode.manual,
+                        overlays: SystemUiOverlay.values,
+                      );
+                    },
+                    controls: (state) {
+                      return widget.surface == VideoPlayerSurface.desktop
+                          ? PCPlayerControls(
+                              state: state,
+                              player: _player!,
+                              onBackPressed: widget.onBackPressed,
+                              onNextEpisode: widget.onNextEpisode,
+                              onPause: widget.onPause,
+                              videoUrl: _currentUrl ?? '',
+                              isLastEpisode: widget.isLastEpisode,
+                              isLoadingVideo: _isLoadingVideo,
+                              onCastStarted: widget.onCastStarted,
+                              videoTitle: widget.videoTitle,
+                              currentEpisodeIndex: widget.currentEpisodeIndex,
+                              totalEpisodes: widget.totalEpisodes,
+                              sourceName: widget.sourceName,
+                              onWebFullscreenChanged:
+                                  widget.onWebFullscreenChanged,
+                              onExitWebFullscreenCallbackReady: (callback) {
+                                _exitWebFullscreenCallback = callback;
+                              },
+                              onExitFullScreen: widget.onExitFullScreen,
+                              live: widget.live,
+                              playbackSpeedListenable: _playbackSpeed,
+                              onSetSpeed: _setPlaybackSpeed,
+                              downloadInfo: _downloadInfo,
+                              onStartDownload: _startDownload,
+                              onCancelDownload: _cancelDownload,
+                              onSaveAs: _saveAs,
+                            )
+                          : MobilePlayerControls(
+                              player: _player!,
+                              state: state,
+                              onControlsVisibilityChanged: (_) {},
+                              onBackPressed: widget.onBackPressed,
+                              onFullscreenChange: (isFullscreen) {
+                                _isCurrentlyFullscreen = isFullscreen;
+                                _updateVideoFitMode();
+                              },
+                              onNextEpisode: widget.onNextEpisode,
+                              onPause: widget.onPause,
+                              videoUrl: _currentUrl ?? '',
+                              isLastEpisode: widget.isLastEpisode,
+                              isLoadingVideo: _isLoadingVideo,
+                              onCastStarted: widget.onCastStarted,
+                              videoTitle: widget.videoTitle,
+                              currentEpisodeIndex: widget.currentEpisodeIndex,
+                              totalEpisodes: widget.totalEpisodes,
+                              sourceName: widget.sourceName,
+                              onExitFullScreen: widget.onExitFullScreen,
+                              live: widget.live,
+                              playbackSpeedListenable: _playbackSpeed,
+                              onSetSpeed: _setPlaybackSpeed,
+                              onEnterPipMode: _enterPipMode,
+                              isPipMode: _isPipMode,
+                              onExitPip: _exitPipMode,
+                              downloadInfo: _downloadInfo,
+                              onStartDownload: _startDownload,
+                              onCancelDownload: _cancelDownload,
+                              onSaveAs: _saveAs,
+                            );
+                    },
+                  );
+                  return needsPadding
+                      ? Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: videoWidget,
+                        )
+                      : videoWidget;
+                },
+              )
+            : const Center(
+                child: VideoLoadingIndicator(
+                  size: 48,
+                  color: Colors.white,
+                ),
               ),
-            ),
+      ),
     );
   }
 }

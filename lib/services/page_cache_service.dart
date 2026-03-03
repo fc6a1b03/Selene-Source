@@ -9,7 +9,24 @@ import 'package:selene/services/douban_service.dart';
 import 'package:selene/services/local_mode_storage_service.dart';
 import 'package:selene/services/user_data_service.dart';
 
+/// 缓存条目，包含数据和最后访问时间
+class _CacheEntry<T> {
+  final T data;
+  DateTime lastAccessed;
+  int accessCount;
+
+  _CacheEntry(this.data)
+      : lastAccessed = DateTime.now(),
+        accessCount = 1;
+
+  void touch() {
+    lastAccessed = DateTime.now();
+    accessCount++;
+  }
+}
+
 /// 页面缓存服务 - 单例模式
+/// 使用 LRU (Least Recently Used) 策略管理缓存
 class PageCacheService
     implements
         PlayRecordOperationInterface,
@@ -19,15 +36,63 @@ class PageCacheService
   factory PageCacheService() => _instance;
   PageCacheService._internal();
 
-  // 缓存数据
-  final Map<String, dynamic> _cache = {};
+  // 缓存配置
+  static const int _maxCacheSize = 50; // 最大缓存条目数
+  static const Duration _defaultCacheExpiration = Duration(minutes: 30);
+
+  // 缓存数据 - 使用 _CacheEntry 包装
+  final Map<String, _CacheEntry<Object?>> _cache = {};
 
   /// 获取缓存数据
-  T? getCache<T>(String key) => _cache[key] as T?;
+  T? getCache<T>(String key) {
+    final entry = _cache[key];
+    if (entry == null) return null;
+
+    // 检查是否过期
+    if (_isExpired(entry)) {
+      _cache.remove(key);
+      return null;
+    }
+
+    // 更新访问时间和计数
+    entry.touch();
+    return entry.data as T;
+  }
 
   /// 设置缓存数据
-  void setCache<T>(String key, T data) {
-    _cache[key] = data;
+  void setCache<T>(String key, T data, {Duration? expiration}) {
+    // 如果缓存已满，先清理最旧的条目
+    if (_cache.length >= _maxCacheSize && !_cache.containsKey(key)) {
+      _evictLRU();
+    }
+
+    _cache[key] = _CacheEntry<T>(data);
+  }
+
+  /// 检查缓存条目是否过期
+  bool _isExpired(_CacheEntry<Object?> entry) {
+    final age = DateTime.now().difference(entry.lastAccessed);
+    return age > _defaultCacheExpiration;
+  }
+
+  /// 清理最久未使用的缓存条目
+  void _evictLRU() {
+    if (_cache.isEmpty) return;
+
+    // 找到最久未访问的条目
+    String? oldestKey;
+    DateTime? oldestTime;
+
+    _cache.forEach((key, entry) {
+      if (oldestTime == null || entry.lastAccessed.isBefore(oldestTime!)) {
+        oldestKey = key;
+        oldestTime = entry.lastAccessed;
+      }
+    });
+
+    if (oldestKey != null) {
+      _cache.remove(oldestKey);
+    }
   }
 
   /// 清除指定缓存
@@ -38,6 +103,22 @@ class PageCacheService
   /// 清除所有缓存
   void clearAllCache() {
     _cache.clear();
+  }
+
+  /// 获取缓存统计信息（调试用）
+  Map<String, dynamic> getCacheStats() {
+    return {
+      'size': _cache.length,
+      'maxSize': _maxCacheSize,
+      'keys': _cache.keys.toList(),
+      'entries': _cache.map((key, entry) => MapEntry(
+            key,
+            {
+              'accessCount': entry.accessCount,
+              'lastAccessed': entry.lastAccessed.toIso8601String(),
+            },
+          )),
+    };
   }
 
   // ==================== PlayRecordOperationInterface 实现 ====================

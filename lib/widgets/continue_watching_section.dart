@@ -211,48 +211,63 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
   /// 预加载图片
   Future<void> _preloadImages(List<PlayRecord> records) async {
     if (!mounted) return;
-    // 只预加载前几个图片，避免过度预加载
-    final int preloadCount = math.min(records.length, 5);
+    // 减少预加载数量，避免阻塞UI
+    final int preloadCount = math.min(records.length, 3);
+
+    // 使用 Future.wait 限制并发
+    final futures = <Future<void>>[];
+
     for (int i = 0; i < preloadCount; i++) {
       if (!mounted) break;
       final record = records[i];
-      final imageUrl = await getImageUrl(record.cover, record.source);
+
+      // 创建异步任务
+      futures.add(_preloadSingleImage(record));
+    }
+
+    // 限制并发为2，避免同时发起过多请求
+    for (int i = 0; i < futures.length; i += 2) {
       if (!mounted) break;
-      if (imageUrl.isNotEmpty) {
-        final headers = getImageRequestHeaders(imageUrl, record.source);
-        // Use CachedNetworkImageProvider which cooperates with cached_network_image
+      final batch = futures.skip(i).take(2).toList();
+      await Future.wait(batch);
+    }
+  }
+
+  /// 预加载单张图片
+  Future<void> _preloadSingleImage(PlayRecord record) async {
+    try {
+      final imageUrl = await getImageUrl(record.cover, record.source)
+          .timeout(const Duration(seconds: 3));
+
+      if (!mounted || imageUrl.isEmpty) return;
+
+      final headers = getImageRequestHeaders(imageUrl, record.source);
+
+      // 快速HEAD检查
+      final uri = Uri.tryParse(imageUrl);
+      if (uri != null) {
+        final headOk = await http
+            .head(uri, headers: headers ?? {})
+            .timeout(const Duration(seconds: 3))
+            .then((resp) => resp.statusCode >= 200 && resp.statusCode < 400)
+            .catchError((_) => true); // HEAD失败时继续尝试加载
+
+        if (!headOk) return;
+      }
+
+      // 预缓存图片
+      if (mounted) {
         final provider = CachedNetworkImageProvider(
           imageUrl,
           headers: headers,
         );
-        // Perform a lightweight HEAD check to avoid triggering framework image errors
-        try {
-          final uri = Uri.tryParse(imageUrl);
-          if (uri != null) {
-            // Some servers may not support HEAD; wrap in try/catch and fallback to skipping on failure
-            final headOk = await http
-                .head(uri, headers: headers ?? {})
-                .timeout(const Duration(seconds: 5))
-                .then((resp) => resp.statusCode >= 200 && resp.statusCode < 400)
-                .catchError((_) => false);
-            if (!headOk) {
-              // Skip precaching if the remote server doesn't respond to HEAD properly
-              continue;
-            }
-          }
-          // Precache with a timeout and catch errors so they don't bubble to the global image service
-          if (mounted) {
-            await precacheImage(provider, context)
-                .timeout(const Duration(seconds: 12))
-                .catchError((dynamic e) {
-              debugPrint('precacheImage failed for $imageUrl: $e');
-            });
-          }
-        } catch (e) {
-          // Silently ignore network/timeout errors during preload to avoid UI jank and noisy logs
-          debugPrint('Image preload skipped for $imageUrl: $e');
-        }
+        await precacheImage(provider, context)
+            .timeout(const Duration(seconds: 5))
+            .catchError((_) => null);
       }
+    } catch (e) {
+      // 静默处理错误
+      debugPrint('Image preload skipped for ${record.cover}: $e');
     }
   }
 
@@ -261,12 +276,13 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
     showDialog<void>(
       context: context,
       builder: (BuildContext context) {
-        return Consumer<ThemeService>(
-          builder: (context, themeService, child) {
+        // 使用 Selector 只监听 isDarkMode 变化
+        return Selector<ThemeService, bool>(
+          selector: (_, themeService) => themeService.isDarkMode,
+          builder: (context, isDarkMode, child) {
             return AlertDialog(
-              backgroundColor: themeService.isDarkMode
-                  ? const Color(0xFF1e1e1e)
-                  : Colors.white,
+              backgroundColor:
+                  isDarkMode ? const Color(0xFF1e1e1e) : Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
               ),
@@ -295,7 +311,7 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
                     style: FontUtils.poppins(
                       fontSize: 18,
                       fontWeight: FontWeight.w600,
-                      color: themeService.isDarkMode
+                      color: isDarkMode
                           ? const Color(0xFFffffff)
                           : const Color(0xFF2c3e50),
                     ),
@@ -306,7 +322,7 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
                     '确定要清空所有播放记录吗？此操作无法撤销。',
                     style: FontUtils.poppins(
                       fontSize: 14,
-                      color: themeService.isDarkMode
+                      color: isDarkMode
                           ? const Color(0xFFb0b0b0)
                           : const Color(0xFF7f8c8d),
                       height: 1.4,
@@ -331,7 +347,7 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
                             style: FontUtils.poppins(
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
-                              color: themeService.isDarkMode
+                              color: isDarkMode
                                   ? const Color(0xFFb0b0b0)
                                   : const Color(0xFF7f8c8d),
                             ),
@@ -462,14 +478,16 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
                   crossAxisAlignment: CrossAxisAlignment.baseline,
                   textBaseline: TextBaseline.alphabetic,
                   children: [
-                    Consumer<ThemeService>(
-                      builder: (context, themeService, child) {
+                    // 使用 Selector 只监听 isDarkMode 变化
+                    Selector<ThemeService, bool>(
+                      selector: (_, themeService) => themeService.isDarkMode,
+                      builder: (context, isDarkMode, child) {
                         return Text(
                           '继续观看',
                           style: FontUtils.poppins(
                             fontSize: 18,
                             fontWeight: FontWeight.w600,
-                            color: themeService.isDarkMode
+                            color: isDarkMode
                                 ? const Color(0xFFffffff)
                                 : const Color(0xFF2c3e50),
                           ),
@@ -654,8 +672,10 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
     required IconData icon,
     required VoidCallback onPressed,
   }) {
-    return Consumer<ThemeService>(
-      builder: (context, themeService, child) {
+    // 使用 Selector 只监听 isDarkMode 变化
+    return Selector<ThemeService, bool>(
+      selector: (_, themeService) => themeService.isDarkMode,
+      builder: (context, isDarkMode, child) {
         return Material(
           color: Colors.transparent,
           child: InkWell(
@@ -665,12 +685,12 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
               width: 64,
               height: 64,
               decoration: BoxDecoration(
-                color: themeService.isDarkMode
+                color: isDarkMode
                     ? const Color(0xE61F2937)
                     : const Color(0xF2FFFFFF),
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: themeService.isDarkMode
+                  color: isDarkMode
                       ? const Color(0xFF4B5563)
                       : const Color(0xFFE5E7EB),
                 ),
@@ -685,7 +705,7 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
               child: Icon(
                 icon,
                 size: 32,
-                color: themeService.isDarkMode
+                color: isDarkMode
                     ? const Color(0xFFD1D5DB)
                     : const Color(0xFF4B5563),
               ),
@@ -720,6 +740,7 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
           height: cardHeight, // 使用缓存的高度
           child: ListView.builder(
             controller: _scrollController,
+            cacheExtent: 200, // 增加预加载范围
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 16),
             itemCount: _playRecords.length,
@@ -776,6 +797,7 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
           height: cardHeight, // 使用缓存的高度
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: ListView.builder(
+            cacheExtent: 100,
             scrollDirection: Axis.horizontal,
             itemCount: skeletonCount,
             itemBuilder: (context, index) {
@@ -829,9 +851,8 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
 
   /// 构建错误状态
   Widget _buildErrorState() {
-    return Container(
+    return SizedBox(
       height: 100,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

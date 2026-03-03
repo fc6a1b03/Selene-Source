@@ -72,6 +72,7 @@ class _SearchResultsGridState extends State<SearchResultsGrid>
         final double itemHeight = itemWidth * 2.0; // 增加高度比例，确保有足够空间避免溢出
 
         return GridView.builder(
+          cacheExtent: 200, // 增加预加载范围，减少滚动时的加载延迟
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
             crossAxisCount: crossAxisCount,

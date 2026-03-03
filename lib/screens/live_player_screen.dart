@@ -8,6 +8,7 @@ import 'package:selene/design/design_system.dart';
 import 'package:selene/models/epg_program.dart';
 import 'package:selene/models/live_channel.dart';
 import 'package:selene/models/live_source.dart';
+import 'package:selene/services/global_player_manager.dart';
 import 'package:selene/services/live_service.dart';
 import 'package:selene/services/source_speed_test_service.dart';
 import 'package:selene/services/theme_service.dart';
@@ -36,7 +37,7 @@ class LivePlayerScreen extends StatefulWidget {
 }
 
 class _LivePlayerScreenState extends State<LivePlayerScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late SystemUiOverlayStyle _originalStyle;
   bool _isInitialized = false;
   late LiveChannel _currentChannel;
@@ -92,6 +93,9 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
   @override
   void initState() {
     super.initState();
+    // 添加应用生命周期监听
+    WidgetsBinding.instance.addObserver(this);
+
     _currentChannel = widget.channel;
     _currentSource = widget.source;
 
@@ -217,7 +221,18 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     }
   }
 
-  void _switchChannel(LiveChannel channel) {
+  Future<void> _switchChannel(LiveChannel channel) async {
+    // 如果点击的是当前频道，不执行任何操作
+    if (channel.id == _currentChannel.id) return;
+
+    // 先释放旧播放器，确保全局管理器注销旧的 playerId
+    await _disposePlayer();
+
+    // 等待一帧，确保旧 VideoPlayerWidget 的 dispose 完成
+    await Future<void>.delayed(Duration.zero);
+
+    if (!mounted) return;
+
     setState(() {
       _currentChannel = channel;
       _isLoading = true;
@@ -225,7 +240,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     });
 
     // 重新加载 EPG
-    _loadEpgData();
+    await _loadEpgData();
 
     // 滚动到当前频道
     _scrollToCurrentChannel();
@@ -306,12 +321,17 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
 
         if (mounted && bestChannel.id != _currentChannel.id) {
           debugPrint('自动切换到最佳源: ${bestChannel.name} (${bestLatency}ms)');
-          _switchChannel(bestChannel);
+          await _switchChannel(bestChannel);
         }
       }
     } catch (e) {
       debugPrint('自动测速失败: $e');
     } finally {
+      // 测速完成后，异步排序频道列表（避免卡顿）
+      if (mounted) {
+        _sortChannelsByLatency();
+      }
+
       if (mounted) {
         setState(() {
           _isSpeedTesting = false;
@@ -323,8 +343,62 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     }
   }
 
+  /// 根据测速延迟对频道列表进行排序
+  /// 延迟执行避免阻塞UI主线程
+  void _sortChannelsByLatency() {
+    if (_sourceLatency.isEmpty) return;
+
+    // 延迟到下一帧执行，避免阻塞当前UI渲染
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      // 复制当前列表进行排序
+      final sortedChannels = List<LiveChannel>.from(_filteredChannels);
+
+      // 对频道进行排序：可用的按延迟排序，不可用排在最后
+      sortedChannels.sort((a, b) {
+        final latencyA = _sourceLatency[a.id] ?? -1;
+        final latencyB = _sourceLatency[b.id] ?? -1;
+
+        // -1 表示未测试或不可用，排在最后
+        if (latencyA < 0 && latencyB < 0) return 0;
+        if (latencyA < 0) return 1;
+        if (latencyB < 0) return -1;
+
+        // 按延迟从小到大排序
+        return latencyA.compareTo(latencyB);
+      });
+
+      // 检查列表是否真的发生了变化
+      var hasChanged = false;
+      for (var i = 0; i < sortedChannels.length; i++) {
+        if (sortedChannels[i].id != _filteredChannels[i].id) {
+          hasChanged = true;
+          break;
+        }
+      }
+
+      // 只有顺序变化了才更新UI
+      if (hasChanged && mounted) {
+        setState(() {
+          _filteredChannels = sortedChannels;
+        });
+        debugPrint('频道列表已按延迟排序');
+      }
+    });
+  }
+
   @override
   void dispose() {
+    // 移除应用生命周期监听
+    WidgetsBinding.instance.removeObserver(this);
+
+    // 强制注销全局播放器管理器（同步操作，确保立即生效）
+    GlobalPlayerManager.instance.forceDispose();
+
+    // 停止播放并释放播放器资源（异步，但 dispose 不等待）
+    _disposePlayer();
+
     // 恢复原始的系统UI样式
     SystemChrome.setSystemUIOverlayStyle(_originalStyle);
     // 释放滚动控制器
@@ -338,6 +412,45 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     _speedTestService?.dispose();
     _speedTestService = null;
     super.dispose();
+  }
+
+  /// 释放播放器资源
+  Future<void> _disposePlayer() async {
+    try {
+      if (_videoPlayerController != null) {
+        // 先从全局管理器注销
+        GlobalPlayerManager.instance
+            .unregisterPlayer(playerId: 'LivePlayer_${widget.channel.id}');
+        // 先暂停播放
+        await _videoPlayerController!.pause();
+        // 释放资源
+        await _videoPlayerController!.dispose();
+        _videoPlayerController = null;
+        debugPrint('直播播放器已释放');
+      }
+    } catch (e) {
+      debugPrint('释放播放器失败: $e');
+    }
+  }
+
+  /// 注册到全局播放器管理器
+  bool _registerGlobalPlayer() {
+    return GlobalPlayerManager.instance.registerPlayer(
+      () {
+        // 同步释放播放器（用于全局管理器强制释放场景）
+        if (_videoPlayerController != null) {
+          _videoPlayerController!.pause();
+          _videoPlayerController!.dispose();
+          _videoPlayerController = null;
+          debugPrint('直播播放器被全局管理器释放');
+        }
+        // 如果当前页面还在，需要退出
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
+      },
+      playerId: 'LivePlayer_${widget.channel.id}',
+    );
   }
 
   Future<void> _loadEpgData() async {
@@ -396,6 +509,24 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
   }
 
   /// 处理视频播放器 ready 事件
+  /// 应用生命周期状态变化
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+
+    // 进入后台时继续播放，不做任何处理
+    // 只有在返回首页（dispose）时才销毁播放器
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.resumed:
+      case AppLifecycleState.hidden:
+        // 不做任何处理，让视频在后台继续播放
+        break;
+    }
+  }
+
   void _onVideoPlayerReady() {
     if (mounted) {
       setState(() {
@@ -640,33 +771,17 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
     final topOffset = statusBarHeight + macOSPadding;
 
     if (_isWebFullscreen) {
-      // 网页全屏模式：播放器占据整个屏幕（保留顶部安全区域）
-      return Positioned(
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        child: Column(
+      // 完整全屏模式：播放器占据整个屏幕（包括状态栏区域）
+      return Positioned.fill(
+        child: Stack(
           children: [
-            // 顶部安全区域
-            Container(
-              height: topOffset,
+            ColoredBox(
+              key: _playerKey,
               color: Colors.black,
+              child: _buildPlayerWidget(),
             ),
-            // 播放器
-            Expanded(
-              child: Stack(
-                children: [
-                  ColoredBox(
-                    key: _playerKey,
-                    color: Colors.black,
-                    child: _buildPlayerWidget(),
-                  ),
-                  // 加载蒙版
-                  _buildSwitchLoadingOverlay(),
-                ],
-              ),
-            ),
+            // 加载蒙版
+            _buildSwitchLoadingOverlay(),
           ],
         ),
       );
@@ -758,9 +873,26 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
             : 'AptvPlayer/1.4.10',
       },
       videoTitle: _currentChannel.name,
-      onBackPressed:
-          _isWebFullscreen ? _exitWebFullscreen : () => Navigator.pop(context),
-      onControllerCreated: (controller) {
+      onBackPressed: _isWebFullscreen
+          ? _exitWebFullscreen
+          : () {
+              // 先释放播放器，再返回
+              _disposePlayer().then((_) {
+                if (mounted) {
+                  Navigator.pop(context);
+                }
+              });
+            },
+      onControllerCreated: (controller) async {
+        // 先注册全局播放器，如果失败说明已有播放器在运行
+        final registered = _registerGlobalPlayer();
+        if (!registered) {
+          // 重复注册，释放这个新创建的控制器
+          debugPrint('LivePlayerScreen: 检测到重复播放器，释放新实例');
+          await controller.pause();
+          await controller.dispose();
+          return;
+        }
         _videoPlayerController = controller;
       },
       onWebFullscreenChanged: (isWebFullscreen) {
@@ -1139,12 +1271,12 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
             ),
             // 测速状态指示器（只在有测速结果时显示）
             trailing: _buildSpeedTestIndicator(channel, themeService),
-            onTap: () {
+            onTap: () async {
               // 检查当前是否在频道名称标签页模式下
               if (_currentTabChannelName != null &&
                   _currentTabChannelName == channel.name) {
                 // 如果已经在频道名称标签页模式下，并且点击的是同名频道，则直接切换到该频道
-                _switchChannel(channel);
+                await _switchChannel(channel);
               } else {
                 // 检查是否有多个同名频道
                 final sameNamedChannels =
@@ -1153,10 +1285,10 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
                   // 如果有多个同名频道，切换到频道名称标签页
                   _switchToChannelTab(channel.name);
                   // 并同时切换到所选频道
-                  _switchChannel(channel);
+                  await _switchChannel(channel);
                 } else {
                   // 否则直接切换到频道
-                  _switchChannel(channel);
+                  await _switchChannel(channel);
                 }
               }
             },
@@ -1304,7 +1436,7 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
                             });
                             await _loadAllChannels();
                             if (mounted && _allChannels.isNotEmpty) {
-                              _switchChannel(_allChannels.first);
+                              await _switchChannel(_allChannels.first);
                             }
                           },
                           themeService,
@@ -2164,8 +2296,16 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
       isVisible: _isLoading,
       message: _loadingMessage,
       animationController: _loadingAnimationController,
-      onBackPressed:
-          _isWebFullscreen ? _exitWebFullscreen : () => Navigator.pop(context),
+      onBackPressed: _isWebFullscreen
+          ? _exitWebFullscreen
+          : () {
+              // 先释放播放器，再返回
+              _disposePlayer().then((_) {
+                if (mounted) {
+                  Navigator.pop(context);
+                }
+              });
+            },
     );
   }
 }
