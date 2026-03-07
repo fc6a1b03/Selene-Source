@@ -64,8 +64,6 @@ class _SearchScreenState extends State<SearchScreen>
   late Animation<Offset> _slideAnimation;
 
   // hover 状态
-  String? _hoveredHistoryItem;
-  String? _hoveredDeleteButton;
   String? _hoveredFilterPill;
   bool _isYearSortHovered = false;
 
@@ -684,129 +682,140 @@ class _SearchScreenState extends State<SearchScreen>
             children: _searchHistory.asMap().entries.map((entry) {
               final index = entry.key;
               final history = entry.value;
-              final isHovered = _hoveredHistoryItem == history;
 
               return AppAnimations.entrance(
                 delay: index * 0.05,
-                child: MouseRegion(
-                  onEnter: (_) => setState(() => _hoveredHistoryItem = history),
-                  onExit: (_) => setState(() => _hoveredHistoryItem = null),
-                  child: GestureDetector(
-                    onTap: () {
-                      _searchController.text = history;
-                      setState(() => _searchQuery = history);
-                      _performSearch(history);
-                    },
-                    child: AnimatedContainer(
-                      duration: AppAnimations.fast,
-                      curve: AppAnimations.standard,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        gradient: isHovered
-                            ? AppColors.primaryGradient
-                            : LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [
-                                  isDark
-                                      ? AppColors.darkElevated
-                                      : AppColors.lightSurface,
-                                  isDark
-                                      ? AppColors.darkElevated
-                                          .withValues(alpha: 0.8)
-                                      : AppColors.lightSurface
-                                          .withValues(alpha: 0.8),
-                                ],
-                              ),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: isHovered
-                              ? AppColors.primary.withValues(alpha: 0.5)
-                              : isDark
-                                  ? AppColors.darkBorder
-                                  : AppColors.lightBorder,
-                        ),
-                        boxShadow: isHovered
-                            ? AppShadows.primary(intensity: 0.4)
-                            : isDark
-                                ? AppShadows.darkGlass
-                                : AppShadows.lightGlass,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            LucideIcons.history,
-                            size: 14,
-                            color: isHovered
-                                ? Colors.white
-                                : AppColors.textSecondary(isDark: isDark),
+                child: StatefulBuilder(
+                  builder: (context, setLocalState) {
+                    // 局部状态：用于悬停效果，不影响整个页面
+                    String? hoveredHistoryItem;
+                    String? hoveredDeleteButton;
+
+                    return MouseRegion(
+                      onEnter: (_) =>
+                          setLocalState(() => hoveredHistoryItem = history),
+                      onExit: (_) =>
+                          setLocalState(() => hoveredHistoryItem = null),
+                      child: GestureDetector(
+                        onTap: () {
+                          _searchController.text = history;
+                          setState(() => _searchQuery = history);
+                          _performSearch(history);
+                        },
+                        child: AnimatedContainer(
+                          duration: AppAnimations.fast,
+                          curve: AppAnimations.standard,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
                           ),
-                          const SizedBox(width: 8),
-                          Text(
-                            history,
-                            style: AppTypography.primary(
-                              fontSize: 14,
-                              fontWeight: isHovered
-                                  ? AppTypography.medium
-                                  : AppTypography.regular,
-                              color: isHovered
-                                  ? Colors.white
-                                  : AppColors.textPrimary(isDark: isDark),
-                            ),
-                          ),
-                          // 删除按钮 - 支持 PC 和移动端
-                          const SizedBox(width: 8),
-                          GestureDetector(
-                            onTap: () => _deleteSearchHistory(history),
-                            child: DeviceUtils.isPC()
-                                ? MouseRegion(
-                                    onEnter: (_) => setState(
-                                        () => _hoveredDeleteButton = history),
-                                    onExit: (_) => setState(
-                                        () => _hoveredDeleteButton = null),
-                                    child: AnimatedContainer(
-                                      duration: AppAnimations.micro,
-                                      width: 18,
-                                      height: 18,
-                                      decoration: BoxDecoration(
-                                        color: _hoveredDeleteButton == history
-                                            ? AppColors.error
-                                            : isDark
-                                                ? AppColors.darkTextTertiary
-                                                : AppColors.lightTextTertiary,
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(
-                                        Icons.close,
-                                        size: 12,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  )
-                                : Container(
-                                    width: 20,
-                                    height: 20,
-                                    decoration: BoxDecoration(
-                                      color: isDark
-                                          ? AppColors.darkTextTertiary
-                                          : AppColors.lightTextTertiary,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(
-                                      Icons.close,
-                                      size: 12,
-                                      color: Colors.white,
-                                    ),
+                          decoration: BoxDecoration(
+                            gradient: hoveredHistoryItem == history
+                                ? AppColors.primaryGradient
+                                : LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: [
+                                      isDark
+                                          ? AppColors.darkElevated
+                                          : AppColors.lightSurface,
+                                      isDark
+                                          ? AppColors.darkElevated
+                                              .withValues(alpha: 0.8)
+                                          : AppColors.lightSurface
+                                              .withValues(alpha: 0.8),
+                                    ],
                                   ),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: hoveredHistoryItem == history
+                                  ? AppColors.primary.withValues(alpha: 0.5)
+                                  : isDark
+                                      ? AppColors.darkBorder
+                                      : AppColors.lightBorder,
+                            ),
+                            boxShadow: hoveredHistoryItem == history
+                                ? AppShadows.primary(intensity: 0.4)
+                                : isDark
+                                    ? AppShadows.darkGlass
+                                    : AppShadows.lightGlass,
                           ),
-                        ],
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                LucideIcons.history,
+                                size: 14,
+                                color: hoveredHistoryItem == history
+                                    ? Colors.white
+                                    : AppColors.textSecondary(isDark: isDark),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                history,
+                                style: AppTypography.primary(
+                                  fontSize: 14,
+                                  fontWeight: hoveredHistoryItem == history
+                                      ? AppTypography.medium
+                                      : AppTypography.regular,
+                                  color: hoveredHistoryItem == history
+                                      ? Colors.white
+                                      : AppColors.textPrimary(isDark: isDark),
+                                ),
+                              ),
+                              // 删除按钮 - 支持 PC 和移动端
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: () => _deleteSearchHistory(history),
+                                child: DeviceUtils.isPC()
+                                    ? MouseRegion(
+                                        onEnter: (_) => setLocalState(() =>
+                                            hoveredDeleteButton = history),
+                                        onExit: (_) => setLocalState(
+                                            () => hoveredDeleteButton = null),
+                                        child: AnimatedContainer(
+                                          duration: AppAnimations.micro,
+                                          width: 18,
+                                          height: 18,
+                                          decoration: BoxDecoration(
+                                            color: hoveredDeleteButton ==
+                                                    history
+                                                ? AppColors.error
+                                                : isDark
+                                                    ? AppColors.darkTextTertiary
+                                                    : AppColors
+                                                        .lightTextTertiary,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.close,
+                                            size: 12,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      )
+                                    : Container(
+                                        width: 20,
+                                        height: 20,
+                                        decoration: BoxDecoration(
+                                          color: isDark
+                                              ? AppColors.darkTextTertiary
+                                              : AppColors.lightTextTertiary,
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          Icons.close,
+                                          size: 12,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
+                    );
+                  },
                 ),
               );
             }).toList(),

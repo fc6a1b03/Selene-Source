@@ -13,6 +13,10 @@ dependencies:
   flutter_localizations:
     sdk: flutter
   # ====================
+  # 集合工具
+  # ====================
+  collection: ^1.18.0
+  # ====================
   # 状态管理
   # ====================
   provider: ^6.1.2
@@ -58,6 +62,7 @@ dependencies:
   macos_window_utils: ^1.5.1
   # ====================
   # 工具库
+  async: ^2.13.0
   # ====================
   encrypt: ^5.0.3
   flutter_cache_manager: ^3.4.1

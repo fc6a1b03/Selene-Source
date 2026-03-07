@@ -37,51 +37,67 @@ class NeonButton extends StatefulWidget {
 }
 
 class _NeonButtonState extends State<NeonButton> {
-  bool _isPressed = false;
-  bool _isHovered = false;
+  final ValueNotifier<bool> _isPressed = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _isHovered = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _isPressed.dispose();
+    _isHovered.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final scale = _isPressed ? 0.97 : (_isHovered ? 1.02 : 1.0);
-
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTapDown: (_) {
-          setState(() => _isPressed = true);
+          _isPressed.value = true;
           HapticFeedback.lightImpact();
         },
-        onTapUp: (_) => setState(() => _isPressed = false),
-        onTapCancel: () => setState(() => _isPressed = false),
+        onTapUp: (_) => _isPressed.value = false,
+        onTapCancel: () => _isPressed.value = false,
         onTap: widget.isLoading ? null : widget.onPressed,
-        child: AnimatedScale(
-          scale: scale,
-          duration: AppAnimations.fast,
-          curve: AppAnimations.standard,
-          child: Container(
-            height: widget.height,
-            width: widget.isFullWidth ? double.infinity : null,
-            padding: widget.padding,
-            decoration: BoxDecoration(
-              gradient: widget.gradient,
-              borderRadius: BorderRadius.circular(widget.borderRadius),
-              boxShadow: _buildShadows(),
-            ),
-            child: AnimatedOpacity(
-              duration: AppAnimations.fast,
-              opacity: widget.onPressed == null ? 0.5 : 1.0,
-              child: _buildContent(),
-            ),
-          ),
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _isPressed,
+          builder: (context, isPressed, child) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: _isHovered,
+              builder: (context, isHovered, child) {
+                final scale = isPressed ? 0.97 : (isHovered ? 1.02 : 1.0);
+                return AnimatedScale(
+                  scale: scale,
+                  duration: AppAnimations.fast,
+                  curve: AppAnimations.standard,
+                  child: Container(
+                    height: widget.height,
+                    width: widget.isFullWidth ? double.infinity : null,
+                    padding: widget.padding,
+                    decoration: BoxDecoration(
+                      gradient: widget.gradient,
+                      borderRadius: BorderRadius.circular(widget.borderRadius),
+                      boxShadow: _buildShadows(isPressed, isHovered),
+                    ),
+                    child: AnimatedOpacity(
+                      duration: AppAnimations.fast,
+                      opacity: widget.onPressed == null ? 0.5 : 1.0,
+                      child: _buildContent(),
+                    ),
+                  ),
+                );
+              },
+            );
+          },
         ),
       ),
     );
   }
 
-  List<BoxShadow> _buildShadows() {
-    if (_isPressed) {
+  List<BoxShadow> _buildShadows(bool isPressed, bool isHovered) {
+    if (isPressed) {
       return [
         BoxShadow(
           color: AppColors.primary.withValues(alpha: 0.3),
@@ -100,7 +116,7 @@ class _NeonButtonState extends State<NeonButton> {
       ),
     ];
 
-    if (_isHovered) {
+    if (isHovered) {
       baseShadows.add(
         BoxShadow(
           color: AppColors.secondary.withValues(alpha: 0.3),
@@ -181,7 +197,13 @@ class NeonOutlineButton extends StatefulWidget {
 }
 
 class _NeonOutlineButtonState extends State<NeonOutlineButton> {
-  bool _isHovered = false;
+  final ValueNotifier<bool> _isHovered = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _isHovered.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -189,35 +211,40 @@ class _NeonOutlineButtonState extends State<NeonOutlineButton> {
     final isDark = theme.brightness == Brightness.dark;
 
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: widget.onPressed,
-        child: AnimatedContainer(
-          duration: AppAnimations.fast,
-          height: widget.height,
-          width: widget.isFullWidth ? double.infinity : null,
-          padding: widget.padding,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(widget.borderRadius),
-            border: Border.all(
-              color: _isHovered
-                  ? widget.borderColor
-                  : widget.borderColor.withValues(alpha: 0.5),
-              width: _isHovered ? 2 : 1.5,
-            ),
-            boxShadow: _isHovered
-                ? [
-                    BoxShadow(
-                      color: widget.borderColor.withValues(alpha: 0.3),
-                      blurRadius: 15,
-                      spreadRadius: -2,
-                    ),
-                  ]
-                : null,
-          ),
-          child: _buildContent(isDark),
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _isHovered,
+          builder: (context, isHovered, child) {
+            return AnimatedContainer(
+              duration: AppAnimations.fast,
+              height: widget.height,
+              width: widget.isFullWidth ? double.infinity : null,
+              padding: widget.padding,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(widget.borderRadius),
+                border: Border.all(
+                  color: isHovered
+                      ? widget.borderColor
+                      : widget.borderColor.withValues(alpha: 0.5),
+                  width: isHovered ? 2 : 1.5,
+                ),
+                boxShadow: isHovered
+                    ? [
+                        BoxShadow(
+                          color: widget.borderColor.withValues(alpha: 0.3),
+                          blurRadius: 15,
+                          spreadRadius: -2,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: _buildContent(isDark),
+            );
+          },
         ),
       ),
     );
@@ -283,52 +310,71 @@ class NeonIconButton extends StatefulWidget {
 }
 
 class _NeonIconButtonState extends State<NeonIconButton> {
-  bool _isHovered = false;
-  bool _isPressed = false;
+  final ValueNotifier<bool> _isHovered = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _isPressed = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _isHovered.dispose();
+    _isPressed.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final effectiveColor = widget.color ?? AppColors.primary;
-    final scale = _isPressed ? 0.9 : (_isHovered ? 1.1 : 1.0);
 
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
-        onTapDown: (_) => setState(() => _isPressed = true),
-        onTapUp: (_) => setState(() => _isPressed = false),
-        onTapCancel: () => setState(() => _isPressed = false),
+        onTapDown: (_) => _isPressed.value = true,
+        onTapUp: (_) => _isPressed.value = false,
+        onTapCancel: () => _isPressed.value = false,
         onTap: widget.onPressed,
-        child: AnimatedScale(
-          scale: scale,
-          duration: AppAnimations.fast,
-          curve: AppAnimations.emphasize,
-          child: Container(
-            width: widget.size,
-            height: widget.size,
-            decoration: BoxDecoration(
-              color: widget.backgroundColor ??
-                  (isDark ? AppColors.darkElevated : AppColors.lightSurface),
-              borderRadius: BorderRadius.circular(widget.borderRadius),
-              boxShadow: widget.isGlow && _isHovered
-                  ? [
-                      BoxShadow(
-                        color: effectiveColor.withValues(alpha: 0.5),
-                        blurRadius: 20,
-                        spreadRadius: -5,
-                      ),
-                    ]
-                  : AppShadows.small,
-            ),
-            child: Icon(
-              widget.icon,
-              color: effectiveColor,
-              size: widget.size * 0.4,
-            ),
-          ),
+        child: ValueListenableBuilder<bool>(
+          valueListenable: _isPressed,
+          builder: (context, isPressed, child) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: _isHovered,
+              builder: (context, isHovered, child) {
+                final scale = isPressed ? 0.9 : (isHovered ? 1.1 : 1.0);
+                return AnimatedScale(
+                  scale: scale,
+                  duration: AppAnimations.fast,
+                  curve: AppAnimations.emphasize,
+                  child: Container(
+                    width: widget.size,
+                    height: widget.size,
+                    decoration: BoxDecoration(
+                      color: widget.backgroundColor ??
+                          (isDark
+                              ? AppColors.darkElevated
+                              : AppColors.lightSurface),
+                      borderRadius: BorderRadius.circular(widget.borderRadius),
+                      boxShadow: widget.isGlow && isHovered
+                          ? [
+                              BoxShadow(
+                                color: effectiveColor.withValues(alpha: 0.5),
+                                blurRadius: 20,
+                                spreadRadius: -5,
+                              ),
+                            ]
+                          : AppShadows.small,
+                    ),
+                    child: Icon(
+                      widget.icon,
+                      color: effectiveColor,
+                      size: widget.size * 0.4,
+                    ),
+                  ),
+                );
+              },
+            );
+          },
         ),
       ),
     );

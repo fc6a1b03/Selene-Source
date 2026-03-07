@@ -111,10 +111,16 @@ class _ContinueWatchingSectionState extends State<ContinueWatchingSection>
     final position = _scrollController.position;
     const threshold = 1.0; // 容差值，避免浮点误差
 
-    setState(() {
-      _showLeftScroll = position.pixels > threshold;
-      _showRightScroll = position.pixels < position.maxScrollExtent - threshold;
-    });
+    final newShowLeft = position.pixels > threshold;
+    final newShowRight = position.pixels < position.maxScrollExtent - threshold;
+
+    // 只在值变化时才 setState
+    if (_showLeftScroll != newShowLeft || _showRightScroll != newShowRight) {
+      setState(() {
+        _showLeftScroll = newShowLeft;
+        _showRightScroll = newShowRight;
+      });
+    }
   }
 
   void _scrollLeft() {

@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -89,7 +90,7 @@ class _CapsuleTabSwitcherState extends State<CapsuleTabSwitcher>
   @override
   void didUpdateWidget(CapsuleTabSwitcher oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.tabs.toString() != oldWidget.tabs.toString()) {
+    if (!const ListEquality<String>().equals(widget.tabs, oldWidget.tabs)) {
       _calculateTabMetrics();
     }
     if (widget.selectedTab != oldWidget.selectedTab) {
@@ -132,8 +133,9 @@ class _CapsuleTabSwitcherState extends State<CapsuleTabSwitcher>
       return const SizedBox.shrink();
     }
 
-    return Consumer<ThemeService>(
-      builder: (context, themeService, child) {
+    return Selector<ThemeService, bool>(
+      selector: (_, themeService) => themeService.isDarkMode,
+      builder: (context, isDarkMode, child) {
         final totalWidth =
             _tabWidths.isNotEmpty ? _tabWidths.reduce((a, b) => a + b) : 0.0;
 
@@ -143,7 +145,7 @@ class _CapsuleTabSwitcherState extends State<CapsuleTabSwitcher>
             width: totalWidth,
             height: 32,
             decoration: BoxDecoration(
-              color: themeService.isDarkMode
+              color: isDarkMode
                   ? const Color(0xFF333333)
                   : const Color(0xFFe0e0e0),
               borderRadius: BorderRadius.circular(16),
@@ -160,13 +162,13 @@ class _CapsuleTabSwitcherState extends State<CapsuleTabSwitcher>
                         width: _widthAnimation.value,
                         height: 32,
                         decoration: BoxDecoration(
-                          color: themeService.isDarkMode
+                          color: isDarkMode
                               ? const Color(0xFF1e1e1e)
                               : Colors.white,
                           borderRadius: BorderRadius.circular(16),
                           boxShadow: [
                             BoxShadow(
-                              color: themeService.isDarkMode
+                              color: isDarkMode
                                   ? Colors.black.withValues(alpha: 0.3)
                                   : Colors.black.withValues(alpha: 0.1),
                               blurRadius: 3,
@@ -183,7 +185,7 @@ class _CapsuleTabSwitcherState extends State<CapsuleTabSwitcher>
                     final index = widget.tabs.indexOf(tab);
                     return SizedBox(
                       width: _tabWidths[index],
-                      child: _buildTabButton(tab, index, themeService),
+                      child: _buildTabButton(tab, index, isDarkMode),
                     );
                   }).toList(),
                 ),
@@ -195,7 +197,7 @@ class _CapsuleTabSwitcherState extends State<CapsuleTabSwitcher>
     );
   }
 
-  Widget _buildTabButton(String label, int index, ThemeService themeService) {
+  Widget _buildTabButton(String label, int index, bool isDarkMode) {
     return _CapsuleTabHover(
       isPC: DeviceUtils.isPC(),
       label: label,
@@ -204,7 +206,7 @@ class _CapsuleTabSwitcherState extends State<CapsuleTabSwitcher>
       oldIndex: _oldIndex,
       progressAnimation: _progressAnimation,
       animationController: _animationController,
-      themeService: themeService,
+      isDarkMode: isDarkMode,
       onTap: () {
         if (!_animationController.isAnimating) {
           widget.onTabChanged(label);
@@ -223,7 +225,7 @@ class _CapsuleTabHover extends StatefulWidget {
   final int oldIndex;
   final Animation<double> progressAnimation;
   final AnimationController animationController;
-  final ThemeService themeService;
+  final bool isDarkMode;
   final VoidCallback onTap;
 
   const _CapsuleTabHover({
@@ -234,7 +236,7 @@ class _CapsuleTabHover extends StatefulWidget {
     required this.oldIndex,
     required this.progressAnimation,
     required this.animationController,
-    required this.themeService,
+    required this.isDarkMode,
     required this.onTap,
   });
 
@@ -243,33 +245,28 @@ class _CapsuleTabHover extends StatefulWidget {
 }
 
 class _CapsuleTabHoverState extends State<_CapsuleTabHover> {
-  bool _isHovered = false;
+  final ValueNotifier<bool> _isHovered = ValueNotifier<bool>(false);
 
-  bool get _isSelected {
-    // 判断当前tab是否被选中
-    if (widget.index == widget.selectedIndex) {
-      return true;
-    }
-    // 如果正在动画中，oldIndex也算部分选中
-    if (widget.animationController.isAnimating &&
-        widget.index == widget.oldIndex) {
-      return true;
-    }
-    return false;
+  @override
+  void dispose() {
+    _isHovered.dispose();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      cursor: _isSelected ? SystemMouseCursors.basic : SystemMouseCursors.click,
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
+      cursor: widget.index == widget.selectedIndex
+          ? SystemMouseCursors.basic
+          : SystemMouseCursors.click,
       child: GestureDetector(
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: Center(
           child: AnimatedBuilder(
-            animation: widget.progressAnimation,
+            animation: Listenable.merge([_isHovered, widget.progressAnimation]),
             builder: (context, child) {
               double progress = 0.0;
               if (widget.index == widget.selectedIndex) {
@@ -289,18 +286,18 @@ class _CapsuleTabHoverState extends State<_CapsuleTabHover> {
               if (isSelected) {
                 // 选中状态：使用原来的颜色插值逻辑
                 color = Color.lerp(
-                  widget.themeService.isDarkMode
+                  widget.isDarkMode
                       ? const Color(0xFFb0b0b0)
                       : const Color(0xFF7f8c8d),
-                  widget.themeService.isDarkMode ? Colors.white : Colors.black,
+                  widget.isDarkMode ? Colors.white : Colors.black,
                   progress,
                 )!;
-              } else if (widget.isPC && _isHovered) {
+              } else if (widget.isPC && _isHovered.value) {
                 // PC上未选中且hover：显示绿色
                 color = const Color(0xFF27AE60);
               } else {
                 // 未选中且未hover：默认颜色
-                color = widget.themeService.isDarkMode
+                color = widget.isDarkMode
                     ? const Color(0xFFb0b0b0)
                     : const Color(0xFF7f8c8d);
               }

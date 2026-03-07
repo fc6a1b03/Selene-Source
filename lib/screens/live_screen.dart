@@ -59,6 +59,11 @@ class _LiveScreenState extends State<LiveScreen>
   int _speedTestProgress = 0; // 测速进度
   int _speedTestTotal = 0; // 测速总数
 
+  // 测速批量更新相关
+  final Map<String, (bool, int)> _pendingSpeedUpdates = {};
+  Timer? _speedUpdateDebounceTimer;
+  static const Duration _speedUpdateInterval = Duration(milliseconds: 100);
+
   // 速度过滤相关
   SpeedFilterType _selectedSpeedFilter = SpeedFilterType.all;
 
@@ -91,6 +96,7 @@ class _LiveScreenState extends State<LiveScreen>
 
   @override
   void dispose() {
+    _speedUpdateDebounceTimer?.cancel();
     _scrollController.dispose();
     _refreshIconController.dispose();
     _searchController.dispose();
@@ -132,10 +138,22 @@ class _LiveScreenState extends State<LiveScreen>
         maxConcurrency: 10, // 直播测速并发数可以高一些
         onResult: (String id,
             {required bool isAvailable, required int latencyMs}) {
-          setState(() {
-            _channelAvailability[id] = isAvailable;
-            _channelLatency[id] = latencyMs;
-            _speedTestProgress++;
+          // 先更新数据，不立即 setState
+          _pendingSpeedUpdates[id] = (isAvailable, latencyMs);
+
+          // 防抖：每 100ms 更新一次 UI
+          _speedUpdateDebounceTimer?.cancel();
+          _speedUpdateDebounceTimer = Timer(_speedUpdateInterval, () {
+            if (mounted) {
+              setState(() {
+                _pendingSpeedUpdates.forEach((key, value) {
+                  _channelAvailability[key] = value.$1;
+                  _channelLatency[key] = value.$2;
+                });
+                _speedTestProgress += _pendingSpeedUpdates.length;
+                _pendingSpeedUpdates.clear();
+              });
+            }
           });
         },
       );
@@ -660,7 +678,7 @@ class _LiveScreenState extends State<LiveScreen>
     final stats = _getFilteredStats();
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       color: Colors.transparent,
       child: Row(
         children: [

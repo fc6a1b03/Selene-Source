@@ -176,6 +176,7 @@ class _HistoryGridState extends State<HistoryGrid>
             padding: const EdgeInsets.all(16),
             shrinkWrap: true,
             physics: const NeverScrollableScrollPhysics(),
+            cacheExtent: itemHeight * 2, // 预加载 2 行内容，减少滚动时的加载延迟
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: crossAxisCount,
               childAspectRatio: itemWidth / itemHeight,

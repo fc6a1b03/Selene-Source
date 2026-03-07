@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:selene/models/douban_movie.dart';
@@ -138,6 +140,10 @@ class _MovieScreenState extends State<MovieScreen> {
   bool _hasMore = true;
   String? _errorMessage;
 
+  // 防抖定时器
+  Timer? _filterDebounceTimer;
+  static const Duration _filterDebounceDelay = Duration(milliseconds: 300);
+
   /// 获取当前筛选状态
   String _getCurrentFilterState() {
     return '$_selectedCategoryValue|$_selectedRegionValue|$_selectedMovieType|$_selectedMovieRegion|$_selectedMovieYear|$_selectedMovieSort';
@@ -161,8 +167,17 @@ class _MovieScreenState extends State<MovieScreen> {
 
   @override
   void dispose() {
+    _filterDebounceTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// 防抖请求电影数据
+  void _fetchMoviesDebounced({bool isRefresh = false}) {
+    _filterDebounceTimer?.cancel();
+    _filterDebounceTimer = Timer(_filterDebounceDelay, () {
+      _fetchMovies(isRefresh: isRefresh);
+    });
   }
 
   /// 处理滚动事件，支持内容不足一屏时的加载更多
@@ -572,7 +587,7 @@ class _MovieScreenState extends State<MovieScreen> {
                 _selectedMovieYear = 'all';
                 _selectedMovieSort = 'T';
               });
-              _fetchMovies(isRefresh: true);
+              _fetchMoviesDebounced(isRefresh: true);
             },
           ),
           const SizedBox(height: 16),
@@ -609,22 +624,22 @@ class _MovieScreenState extends State<MovieScreen> {
                 _buildFilterPill('类型', _movieTypeOptions, _selectedMovieType,
                     (v) {
                   setState(() => _selectedMovieType = v);
-                  _fetchMovies(isRefresh: true);
+                  _fetchMoviesDebounced(isRefresh: true);
                 }),
                 _buildFilterPill(
                     '地区', _movieRegionOptions, _selectedMovieRegion, (v) {
                   setState(() => _selectedMovieRegion = v);
-                  _fetchMovies(isRefresh: true);
+                  _fetchMoviesDebounced(isRefresh: true);
                 }),
                 _buildFilterPill('年代', _movieYearOptions, _selectedMovieYear,
                     (v) {
                   setState(() => _selectedMovieYear = v);
-                  _fetchMovies(isRefresh: true);
+                  _fetchMoviesDebounced(isRefresh: true);
                 }),
                 _buildFilterPill('排序', _movieSortOptions, _selectedMovieSort,
                     (v) {
                   setState(() => _selectedMovieSort = v);
-                  _fetchMovies(isRefresh: true);
+                  _fetchMoviesDebounced(isRefresh: true);
                 }),
               ],
             ),
@@ -661,7 +676,7 @@ class _MovieScreenState extends State<MovieScreen> {
               setState(() {
                 _selectedRegionValue = newValue;
               });
-              _fetchMovies(isRefresh: true);
+              _fetchMoviesDebounced(isRefresh: true);
             },
           ),
         ),

@@ -747,24 +747,10 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
     if (widget.isLoadingVideo) {
       return ColoredBox(
         color: Colors.black.withValues(alpha: 0.7),
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const VideoLoadingIndicator(
-                size: 48,
-                color: Colors.white,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                '加载中...',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.9),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+        child: const Center(
+          child: VideoLoadingIndicator(
+            size: 48,
+            color: Colors.white,
           ),
         ),
       );

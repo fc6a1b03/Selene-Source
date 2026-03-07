@@ -1,3 +1,4 @@
+import 'package:async/async.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -46,14 +47,19 @@ class VideoCard extends StatefulWidget {
 }
 
 class _VideoCardState extends State<VideoCard> {
-  bool _isHovered = false;
-  late Future<String> _imageUrlFuture;
+  final ValueNotifier<bool> _isHovered = ValueNotifier<bool>(false);
+  AsyncMemoizer<String>? _imageUrlMemoizer;
 
   @override
   void initState() {
     super.initState();
-    _imageUrlFuture =
-        getImageUrl(widget.videoInfo.cover, widget.videoInfo.source);
+    _initImageUrlFuture();
+  }
+
+  void _initImageUrlFuture() {
+    _imageUrlMemoizer = AsyncMemoizer();
+    _imageUrlMemoizer!.runOnce(
+        () => getImageUrl(widget.videoInfo.cover, widget.videoInfo.source));
   }
 
   @override
@@ -62,10 +68,18 @@ class _VideoCardState extends State<VideoCard> {
     // 只在封面或来源变化时重新获取
     if (oldWidget.videoInfo.cover != widget.videoInfo.cover ||
         oldWidget.videoInfo.source != widget.videoInfo.source) {
-      _imageUrlFuture =
-          getImageUrl(widget.videoInfo.cover, widget.videoInfo.source);
+      // 重新初始化 memoizer
+      _initImageUrlFuture();
     }
   }
+
+  @override
+  void dispose() {
+    _isHovered.dispose();
+    super.dispose();
+  }
+
+  Future<String> get _imageUrlFuture => _imageUrlMemoizer!.future;
 
   @override
   Widget build(BuildContext context) {
@@ -89,38 +103,51 @@ class _VideoCardState extends State<VideoCard> {
         final headers =
             getImageRequestHeaders(imageUrl, widget.videoInfo.source);
 
-        Widget card = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 封面区域
-            _buildCover(
+        // 使用 AnimatedBuilder 监听 _isHovered 变化，避免频繁 setState
+        return AnimatedBuilder(
+          animation: _isHovered,
+          builder: (context, _) {
+            final isHovered = _isHovered.value;
+
+            Widget card = Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 封面区域
+                _buildCover(
+                  width: width,
+                  height: height,
+                  imageUrl: imageUrl,
+                  headers: headers,
+                  isDark: isDark,
+                  isPC: isPC,
+                  shouldShowEpisodeInfo: shouldShowEpisodeInfo,
+                  shouldShowProgress: shouldShowProgress,
+                  episodeText: episodeText,
+                  isHovered: isHovered,
+                ),
+                const SizedBox(height: 10),
+                // 标题区域
+                _buildTitle(
+                    width: width,
+                    isDark: isDark,
+                    isPC: isPC,
+                    isHovered: isHovered),
+              ],
+            );
+
+            // 添加悬停/点击效果
+            if (isPC) {
+              card = _buildPCInteraction(card, isHovered);
+            } else {
+              card = _buildMobileInteraction(card);
+            }
+
+            return SizedBox(
               width: width,
-              height: height,
-              imageUrl: imageUrl,
-              headers: headers,
-              isDark: isDark,
-              isPC: isPC,
-              shouldShowEpisodeInfo: shouldShowEpisodeInfo,
-              shouldShowProgress: shouldShowProgress,
-              episodeText: episodeText,
-            ),
-            const SizedBox(height: 10),
-            // 标题区域
-            _buildTitle(width: width, isDark: isDark, isPC: isPC),
-          ],
-        );
-
-        // 添加悬停/点击效果
-        if (isPC) {
-          card = _buildPCInteraction(card);
-        } else {
-          card = _buildMobileInteraction(card);
-        }
-
-        return SizedBox(
-          width: width,
-          child: card,
+              child: card,
+            );
+          },
         );
       },
     );
@@ -137,6 +164,7 @@ class _VideoCardState extends State<VideoCard> {
     required bool shouldShowEpisodeInfo,
     required bool shouldShowProgress,
     required String episodeText,
+    required bool isHovered,
   }) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
@@ -146,7 +174,7 @@ class _VideoCardState extends State<VideoCard> {
         decoration: BoxDecoration(
           color: isDark ? AppColors.darkElevated : AppColors.lightElevated,
           borderRadius: BorderRadius.circular(16),
-          boxShadow: _isHovered ? AppShadows.neonGradient : AppShadows.medium,
+          boxShadow: isHovered ? AppShadows.neonGradient : AppShadows.medium,
         ),
         child: Stack(
           fit: StackFit.expand,
@@ -157,7 +185,7 @@ class _VideoCardState extends State<VideoCard> {
             // 悬停渐变遮罩
             if (isPC)
               AnimatedOpacity(
-                opacity: _isHovered ? 1.0 : 0.0,
+                opacity: isHovered ? 1.0 : 0.0,
                 duration: AppAnimations.fast,
                 child: Container(
                   decoration: BoxDecoration(
@@ -217,7 +245,7 @@ class _VideoCardState extends State<VideoCard> {
               ),
 
             // 悬停操作按钮（PC）
-            if (isPC && _isHovered) _buildHoverActions(isDark: isDark),
+            if (isPC && isHovered) _buildHoverActions(isDark: isDark),
           ],
         ),
       ),
@@ -370,6 +398,7 @@ class _VideoCardState extends State<VideoCard> {
     required double width,
     required bool isDark,
     required bool isPC,
+    required bool isHovered,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -382,7 +411,7 @@ class _VideoCardState extends State<VideoCard> {
             isDark: isDark,
             fontSize: width < 100 ? 13 : 14,
           ).copyWith(
-            color: _isHovered && isPC
+            color: isHovered && isPC
                 ? AppColors.primary
                 : AppColors.textPrimary(isDark: isDark),
           ),
@@ -397,7 +426,7 @@ class _VideoCardState extends State<VideoCard> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: _isHovered && isPC
+              color: isHovered && isPC
                   ? AppColors.primary.withValues(alpha: 0.1)
                   : (isDark ? AppColors.darkElevated : AppColors.lightElevated),
               borderRadius: BorderRadius.circular(6),
@@ -408,7 +437,7 @@ class _VideoCardState extends State<VideoCard> {
                 isDark: isDark,
                 fontSize: 11,
               ).copyWith(
-                color: _isHovered && isPC
+                color: isHovered && isPC
                     ? AppColors.primary
                     : AppColors.textSecondary(isDark: isDark),
               ),
@@ -431,15 +460,15 @@ class _VideoCardState extends State<VideoCard> {
   }
 
   /// PC 交互处理
-  Widget _buildPCInteraction(Widget child) {
+  Widget _buildPCInteraction(Widget child, bool isHovered) {
     return MouseRegion(
       cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
       child: GestureDetector(
         onTap: widget.onTap,
         child: AnimatedScale(
-          scale: _isHovered ? 1.02 : 1.0,
+          scale: isHovered ? 1.02 : 1.0,
           duration: AppAnimations.fast,
           curve: AppAnimations.emphasize,
           child: child,

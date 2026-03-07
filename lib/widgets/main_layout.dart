@@ -67,8 +67,8 @@ class _MainLayoutState extends State<MainLayout> {
   bool _isSearchHovered = false;
   bool _isThemeHovered = false;
   bool _isUserHovered = false;
-  bool _isSearchSubmitHovered = false;
-  bool _isClearHovered = false;
+  final ValueNotifier<bool> _isSearchSubmitHovered = ValueNotifier<bool>(false);
+  final ValueNotifier<bool> _isClearHovered = ValueNotifier<bool>(false);
 
   // 搜索建议相关状态
   List<String> _searchSuggestions = [];
@@ -80,6 +80,8 @@ class _MainLayoutState extends State<MainLayout> {
   void dispose() {
     _debounceTimer?.cancel();
     _removeOverlay();
+    _isSearchSubmitHovered.dispose();
+    _isClearHovered.dispose();
     super.dispose();
   }
 
@@ -483,22 +485,28 @@ class _MainLayoutState extends State<MainLayout> {
           opacity: hasQuery ? 1.0 : 0.0,
           duration: AppAnimations.fast,
           child: MouseRegion(
-            onEnter: (_) => setState(() => _isClearHovered = true),
-            onExit: (_) => setState(() => _isClearHovered = false),
+            onEnter: (_) => _isClearHovered.value = true,
+            onExit: (_) => _isClearHovered.value = false,
             child: GestureDetector(
               onTap: () {
                 _removeOverlay();
                 widget.onClearSearch?.call();
               },
-              child: AnimatedContainer(
-                duration: AppAnimations.fast,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: _isClearHovered
-                      ? AppColors.primary.withValues(alpha: 0.1)
-                      : Colors.transparent,
-                  shape: BoxShape.circle,
-                ),
+              child: AnimatedBuilder(
+                animation: _isClearHovered,
+                builder: (context, child) {
+                  return AnimatedContainer(
+                    duration: AppAnimations.fast,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: _isClearHovered.value
+                          ? AppColors.primary.withValues(alpha: 0.1)
+                          : Colors.transparent,
+                      shape: BoxShape.circle,
+                    ),
+                    child: child,
+                  );
+                },
                 child: Icon(
                   LucideIcons.x,
                   color: AppColors.textTertiary(isDark: isDark),
@@ -510,8 +518,8 @@ class _MainLayoutState extends State<MainLayout> {
         ),
         // 搜索按钮
         MouseRegion(
-          onEnter: (_) => setState(() => _isSearchSubmitHovered = true),
-          onExit: (_) => setState(() => _isSearchSubmitHovered = false),
+          onEnter: (_) => _isSearchSubmitHovered.value = true,
+          onExit: (_) => _isSearchSubmitHovered.value = false,
           child: GestureDetector(
             onTap: hasQuery
                 ? () {
@@ -519,23 +527,29 @@ class _MainLayoutState extends State<MainLayout> {
                     widget.onSearchSubmitted?.call(widget.searchQuery!);
                   }
                 : null,
-            child: AnimatedContainer(
-              duration: AppAnimations.fast,
-              margin: const EdgeInsets.only(right: 4),
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                gradient: hasQuery && _isSearchSubmitHovered
-                    ? AppColors.primaryGradient
-                    : null,
-                color: hasQuery && !_isSearchSubmitHovered
-                    ? AppColors.primary.withValues(alpha: 0.1)
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(12),
-              ),
+            child: AnimatedBuilder(
+              animation: _isSearchSubmitHovered,
+              builder: (context, child) {
+                return AnimatedContainer(
+                  duration: AppAnimations.fast,
+                  margin: const EdgeInsets.only(right: 4),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    gradient: hasQuery && _isSearchSubmitHovered.value
+                        ? AppColors.primaryGradient
+                        : null,
+                    color: hasQuery && !_isSearchSubmitHovered.value
+                        ? AppColors.primary.withValues(alpha: 0.1)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: child,
+                );
+              },
               child: Icon(
                 LucideIcons.arrowRight,
                 color: hasQuery
-                    ? (_isSearchSubmitHovered
+                    ? (_isSearchSubmitHovered.value
                         ? Colors.white
                         : AppColors.primary)
                     : AppColors.textTertiary(isDark: isDark),

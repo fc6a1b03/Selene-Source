@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:selene/models/bangumi.dart';
@@ -218,6 +220,10 @@ class _AnimeScreenState extends State<AnimeScreen> {
   bool _hasMore = true;
   String? _errorMessage;
 
+  // 防抖定时器
+  Timer? _filterDebounceTimer;
+  static const Duration _filterDebounceDelay = Duration(milliseconds: 300);
+
   @override
   void initState() {
     super.initState();
@@ -236,8 +242,17 @@ class _AnimeScreenState extends State<AnimeScreen> {
 
   @override
   void dispose() {
+    _filterDebounceTimer?.cancel();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// 防抖请求动漫数据
+  void _fetchAnimeDataDebounced({bool isRefresh = false}) {
+    _filterDebounceTimer?.cancel();
+    _filterDebounceTimer = Timer(_filterDebounceDelay, () {
+      _fetchAnimeData(isRefresh: isRefresh);
+    });
   }
 
   void _handleScroll() {
@@ -689,7 +704,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
                 _selectedMovieYear = 'all';
                 _selectedMovieSort = 'T';
               });
-              _fetchAnimeData(isRefresh: true);
+              _fetchAnimeDataDebounced(isRefresh: true);
             },
           ),
           const SizedBox(height: 16),
@@ -738,7 +753,7 @@ class _AnimeScreenState extends State<AnimeScreen> {
               setState(() {
                 _selectedWeekday = newValue;
               });
-              _fetchAnimeData(isRefresh: true);
+              _fetchAnimeDataDebounced(isRefresh: true);
             },
           ),
         ),
@@ -767,25 +782,25 @@ class _AnimeScreenState extends State<AnimeScreen> {
                 _buildFilterPill('类型', _animeTypeOptions, _selectedAnimeType,
                     (v) {
                   setState(() => _selectedAnimeType = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
                 _buildFilterPill('地区', _regionOptions, _selectedAnimeRegion,
                     (v) {
                   setState(() => _selectedAnimeRegion = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
                 _buildFilterPill('年代', _yearOptions, _selectedAnimeYear, (v) {
                   setState(() => _selectedAnimeYear = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
                 _buildFilterPill('平台', _platformOptions, _selectedAnimePlatform,
                     (v) {
                   setState(() => _selectedAnimePlatform = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
                 _buildFilterPill('排序', _sortOptions, _selectedAnimeSort, (v) {
                   setState(() => _selectedAnimeSort = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
               ],
             ),
@@ -816,20 +831,20 @@ class _AnimeScreenState extends State<AnimeScreen> {
                 _buildFilterPill('类型', _movieTypeOptions, _selectedMovieType,
                     (v) {
                   setState(() => _selectedMovieType = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
                 _buildFilterPill(
                     '地区', _movieRegionOptions, _selectedMovieRegion, (v) {
                   setState(() => _selectedMovieRegion = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
                 _buildFilterPill('年代', _yearOptions, _selectedMovieYear, (v) {
                   setState(() => _selectedMovieYear = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
                 _buildFilterPill('排序', _sortOptions, _selectedMovieSort, (v) {
                   setState(() => _selectedMovieSort = v);
-                  _fetchAnimeData(isRefresh: true);
+                  _fetchAnimeDataDebounced(isRefresh: true);
                 }),
               ],
             ),

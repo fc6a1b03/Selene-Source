@@ -1739,60 +1739,125 @@ class _PlayerScreenState extends State<PlayerScreen>
             final cardsPerView = _isTablet ? 6.2 : 3.2;
             final buttonWidth = (availableWidth / cardsPerView) - 6; // 减去右边距6
             final buttonHeight = buttonWidth * 1.8 / 3; // 稍微减少高度
+            final isPC = DeviceUtils.isPC();
+            // 滚动距离：一次滚动一屏的宽度
+            final scrollDistance = availableWidth * 0.8;
+            // 只有集数足够多时才显示滚动按钮（超过一屏能显示的集数）
+            final showScrollButtons =
+                isPC && currentDetail!.episodes.length > cardsPerView.floor();
+
+            // 滚动到左侧
+            void scrollLeft() {
+              final currentOffset = _episodesScrollController.offset;
+              final targetOffset = (currentOffset - scrollDistance).clamp(
+                0.0,
+                _episodesScrollController.position.maxScrollExtent,
+              );
+              _episodesScrollController.animateTo(
+                targetOffset,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOut,
+              );
+            }
+
+            // 滚动到右侧
+            void scrollRight() {
+              final currentOffset = _episodesScrollController.offset;
+              final targetOffset = (currentOffset + scrollDistance).clamp(
+                0.0,
+                _episodesScrollController.position.maxScrollExtent,
+              );
+              _episodesScrollController.animateTo(
+                targetOffset,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOut,
+              );
+            }
 
             return SizedBox(
               height: buttonHeight,
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: ListView.builder(
-                  controller: _episodesScrollController,
-                  scrollDirection: Axis.horizontal,
-                  itemCount: currentDetail!.episodes.length,
-                  itemBuilder: (context, index) {
-                    final episodeIndex = _isEpisodesReversed
-                        ? currentDetail!.episodes.length - 1 - index
-                        : index;
-                    final isCurrentEpisode =
-                        episodeIndex == currentEpisodeIndex;
+                child: Stack(
+                  children: [
+                    // 集数卡片列表
+                    ListView.builder(
+                      controller: _episodesScrollController,
+                      scrollDirection: Axis.horizontal,
+                      itemCount: currentDetail!.episodes.length,
+                      itemBuilder: (context, index) {
+                        final episodeIndex = _isEpisodesReversed
+                            ? currentDetail!.episodes.length - 1 - index
+                            : index;
+                        final isCurrentEpisode =
+                            episodeIndex == currentEpisodeIndex;
 
-                    // 获取集数名称，如果episodesTitles为空或长度不够，则使用默认格式
-                    String episodeTitle = '';
-                    if (currentDetail!.episodesTitles.isNotEmpty &&
-                        episodeIndex < currentDetail!.episodesTitles.length) {
-                      episodeTitle =
-                          currentDetail!.episodesTitles[episodeIndex];
-                    } else {
-                      episodeTitle = '第${episodeIndex + 1}集';
-                    }
+                        // 获取集数名称，如果episodesTitles为空或长度不够，则使用默认格式
+                        String episodeTitle = '';
+                        if (currentDetail!.episodesTitles.isNotEmpty &&
+                            episodeIndex <
+                                currentDetail!.episodesTitles.length) {
+                          episodeTitle =
+                              currentDetail!.episodesTitles[episodeIndex];
+                        } else {
+                          episodeTitle = '第${episodeIndex + 1}集';
+                        }
 
-                    return Container(
-                      width: buttonWidth,
-                      margin: const EdgeInsets.only(right: 6),
-                      child: AspectRatio(
-                        aspectRatio: 3 / 2, // 严格保持3:2宽高比
-                        child: _EpisodeCardWithHover(
-                          isCurrentEpisode: isCurrentEpisode,
+                        return Container(
+                          width: buttonWidth,
+                          margin: const EdgeInsets.only(right: 6),
+                          child: AspectRatio(
+                            aspectRatio: 3 / 2, // 严格保持3:2宽高比
+                            child: _EpisodeCardWithHover(
+                              isCurrentEpisode: isCurrentEpisode,
+                              isDarkMode: isDarkMode,
+                              episodeIndex: episodeIndex,
+                              episodeTitle: episodeTitle,
+                              onTap: isCurrentEpisode
+                                  ? null
+                                  : () {
+                                      // 显示切换加载蒙版
+                                      setState(() {
+                                        _showSwitchLoadingOverlay = true;
+                                        _switchLoadingMessage = '切换选集...';
+                                      });
+
+                                      // 集数切换前保存进度
+                                      _saveProgress(
+                                          force: true, scene: '选集列表点击');
+
+                                      startPlay(episodeIndex, 0);
+                                    },
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                    // 左侧滚动按钮（仅在 PC 端且集数足够多时才显示）
+                    if (showScrollButtons)
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
+                        child: _ScrollButton(
                           isDarkMode: isDarkMode,
-                          episodeIndex: episodeIndex,
-                          episodeTitle: episodeTitle,
-                          onTap: isCurrentEpisode
-                              ? null
-                              : () {
-                                  // 显示切换加载蒙版
-                                  setState(() {
-                                    _showSwitchLoadingOverlay = true;
-                                    _switchLoadingMessage = '切换选集...';
-                                  });
-
-                                  // 集数切换前保存进度
-                                  _saveProgress(force: true, scene: '选集列表点击');
-
-                                  startPlay(episodeIndex, 0);
-                                },
+                          direction: AxisDirection.left,
+                          onTap: scrollLeft,
                         ),
                       ),
-                    );
-                  },
+                    // 右侧滚动按钮（仅在 PC 端且集数足够多时才显示）
+                    if (showScrollButtons)
+                      Positioned(
+                        right: 0,
+                        top: 0,
+                        bottom: 0,
+                        child: _ScrollButton(
+                          isDarkMode: isDarkMode,
+                          direction: AxisDirection.right,
+                          onTap: scrollRight,
+                        ),
+                      ),
+                  ],
                 ),
               ),
             );
@@ -2017,118 +2082,131 @@ class _PlayerScreenState extends State<PlayerScreen>
   Widget _buildSourcesSection(ThemeData theme) {
     final isDarkMode = theme.brightness == Brightness.dark;
 
-    return Column(
-      children: [
-        // 换源标题行
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(
-                '换源',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-
-              const Spacer(),
-
-              // 刷新按钮
-              Transform.translate(
-                offset: const Offset(0, 2.6),
-                child: _HoverButton(
-                  onTap: _isRefreshing ? null : _refreshSourcesSpeed,
-                  enabled: !_isRefreshing,
-                  child: RotationTransition(
-                    turns: _refreshAnimationController,
-                    child: Icon(
-                      Icons.refresh,
-                      size: 20,
-                      color: _isRefreshing
-                          ? Colors.green
-                          : (isDarkMode ? Colors.grey[400] : Colors.grey[600]),
+    return StatefulBuilder(
+      builder: (BuildContext context, StateSetter setState) {
+        return Column(
+          children: [
+            // 换源标题行
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    '换源',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                ),
-              ),
 
-              const SizedBox(width: 20),
+                  const Spacer(),
 
-              // 滚动到当前源按钮
-              Transform.translate(
-                offset: const Offset(0, 3.5),
-                child: _HoverButton(
-                  onTap: _scrollToCurrentSource,
-                  child: Container(
-                    width: 18,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color:
-                            isDarkMode ? Colors.grey[400]! : Colors.grey[600]!,
+                  // 刷新按钮
+                  Transform.translate(
+                    offset: const Offset(0, 2.6),
+                    child: _HoverButton(
+                      onTap: _isRefreshing
+                          ? null
+                          : () => _refreshSourcesSpeed(setState),
+                      enabled: !_isRefreshing,
+                      child: RotationTransition(
+                        turns: _refreshAnimationController,
+                        child: Icon(
+                          Icons.refresh,
+                          size: 20,
+                          color: _isRefreshing
+                              ? Colors.green
+                              : (isDarkMode
+                                  ? Colors.grey[400]
+                                  : Colors.grey[600]),
+                        ),
                       ),
                     ),
-                    child: Center(
+                  ),
+
+                  const SizedBox(width: 20),
+
+                  // 滚动到当前源按钮
+                  Transform.translate(
+                    offset: const Offset(0, 3.5),
+                    child: _HoverButton(
+                      onTap: _scrollToCurrentSource,
                       child: Container(
-                        width: 6,
-                        height: 6,
+                        width: 18,
+                        height: 18,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color:
-                              isDarkMode ? Colors.grey[400] : Colors.grey[600],
+                          border: Border.all(
+                            color: isDarkMode
+                                ? Colors.grey[400]!
+                                : Colors.grey[600]!,
+                          ),
+                        ),
+                        child: Center(
+                          child: Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: isDarkMode
+                                  ? Colors.grey[400]
+                                  : Colors.grey[600],
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-              ),
 
-              const SizedBox(width: 20),
+                  const SizedBox(width: 20),
 
-              // 展开按钮
-              _HoverButton(
-                onTap: _showSourcesPanel,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Transform.translate(
-                      offset: const Offset(0, -1.2),
-                      child: Text(
-                        '展开',
-                        style: theme.textTheme.bodyMedium?.copyWith(
+                  // 展开按钮
+                  _HoverButton(
+                    onTap: _showSourcesPanel,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Transform.translate(
+                          offset: const Offset(0, -1.2),
+                          child: Text(
+                            '展开',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: isDarkMode
+                                  ? Colors.grey[400]
+                                  : Colors.grey[600],
+                              fontWeight: FontWeight.w300,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.arrow_forward_ios,
+                          size: 14,
                           color:
                               isDarkMode ? Colors.grey[400] : Colors.grey[600],
-                          fontWeight: FontWeight.w300,
                         ),
-                      ),
+                      ],
                     ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      Icons.arrow_forward_ios,
-                      size: 14,
-                      color: isDarkMode ? Colors.grey[400] : Colors.grey[600],
-                    ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
+            ),
 
-        const SizedBox(height: 2),
+            const SizedBox(height: 2),
 
-        // 源卡片横向滚动区域
-        _buildSourcesHorizontalScroll(theme),
-      ],
+            // 源卡片横向滚动区域
+            _buildSourcesHorizontalScroll(theme),
+          ],
+        );
+      },
     );
   }
 
   /// 构建源卡片横向滚动区域
   Widget _buildSourcesHorizontalScroll(ThemeData theme) {
     final isDarkMode = theme.brightness == Brightness.dark;
+    final isPC = DeviceUtils.isPC();
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -2139,38 +2217,98 @@ class _PlayerScreenState extends State<PlayerScreen>
         final cardsPerView = _isTablet ? 6.2 : 3.2;
         final cardWidth = (availableWidth / cardsPerView) - 6; // 减去右边距6
         final cardHeight = cardWidth * 1.8 / 3; // 稍微减少高度
+        // 滚动距离：一次滚动一屏的宽度
+        final scrollDistance = availableWidth * 0.8;
+
+        // 滚动到左侧
+        void scrollLeft() {
+          final currentOffset = _sourcesScrollController.offset;
+          final targetOffset = (currentOffset - scrollDistance).clamp(
+            0.0,
+            _sourcesScrollController.position.maxScrollExtent,
+          );
+          _sourcesScrollController.animateTo(
+            targetOffset,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
+
+        // 滚动到右侧
+        void scrollRight() {
+          final currentOffset = _sourcesScrollController.offset;
+          final targetOffset = (currentOffset + scrollDistance).clamp(
+            0.0,
+            _sourcesScrollController.position.maxScrollExtent,
+          );
+          _sourcesScrollController.animateTo(
+            targetOffset,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut,
+          );
+        }
 
         return SizedBox(
           height: cardHeight,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: ListView.builder(
-              controller: _sourcesScrollController,
-              scrollDirection: Axis.horizontal,
-              itemCount: allSources.length,
-              itemBuilder: (context, index) {
-                final source = allSources[index];
-                final isCurrentSource =
-                    source.source == currentSource && source.id == currentID;
-                final sourceKey = '${source.source}_${source.id}';
-                final speedInfo = allSourcesSpeed[sourceKey];
+            child: Stack(
+              children: [
+                // 源卡片列表
+                ListView.builder(
+                  controller: _sourcesScrollController,
+                  scrollDirection: Axis.horizontal,
+                  itemCount: allSources.length,
+                  itemBuilder: (context, index) {
+                    final source = allSources[index];
+                    final isCurrentSource = source.source == currentSource &&
+                        source.id == currentID;
+                    final sourceKey = '${source.source}_${source.id}';
+                    final speedInfo = allSourcesSpeed[sourceKey];
 
-                return Container(
-                  width: cardWidth,
-                  margin: const EdgeInsets.only(right: 6),
-                  child: AspectRatio(
-                    aspectRatio: 3 / 2, // 严格保持3:2宽高比
-                    child: _SourceCardWithHover(
-                      isCurrentSource: isCurrentSource,
+                    return Container(
+                      width: cardWidth,
+                      margin: const EdgeInsets.only(right: 6),
+                      child: AspectRatio(
+                        aspectRatio: 3 / 2, // 严格保持3:2宽高比
+                        child: _SourceCardWithHover(
+                          isCurrentSource: isCurrentSource,
+                          isDarkMode: isDarkMode,
+                          source: source,
+                          speedInfo: speedInfo,
+                          onTap: isCurrentSource
+                              ? null
+                              : () => _switchSource(source),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                // 左侧滚动按钮（仅在 PC 端且可以向左滚动时显示）
+                if (isPC)
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: _ScrollButton(
                       isDarkMode: isDarkMode,
-                      source: source,
-                      speedInfo: speedInfo,
-                      onTap:
-                          isCurrentSource ? null : () => _switchSource(source),
+                      direction: AxisDirection.left,
+                      onTap: scrollLeft,
                     ),
                   ),
-                );
-              },
+                // 右侧滚动按钮（仅在 PC 端且可以向右滚动时显示）
+                if (isPC)
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                    child: _ScrollButton(
+                      isDarkMode: isDarkMode,
+                      direction: AxisDirection.right,
+                      onTap: scrollRight,
+                    ),
+                  ),
+              ],
             ),
           ),
         );
@@ -2302,13 +2440,13 @@ class _PlayerScreenState extends State<PlayerScreen>
 
     final aSetState = stateSetter ?? setState;
 
-    // 如果是从外部调用（非面板），设置刷新状态
-    if (stateSetter == null) {
-      setState(() {
-        _isRefreshing = true;
-      });
-      await _refreshAnimationController.repeat();
-    }
+    // 设置刷新状态并启动动画（同时更新 PlayerScreen 和 StatefulBuilder）
+    setState(() {
+      _isRefreshing = true;
+    });
+    aSetState(() {});
+    // 启动动画，不要 await，因为 repeat() 会等到动画停止才返回
+    unawaited(_refreshAnimationController.repeat());
 
     // 清理之前的测速服务
     _speedTestService?.cancelAllTests();
@@ -2359,14 +2497,13 @@ class _PlayerScreenState extends State<PlayerScreen>
       _speedTestService?.dispose();
       _speedTestService = null;
 
-      // 如果是从外部调用（非面板），停止刷新状态
-      if (stateSetter == null) {
-        setState(() {
-          _isRefreshing = false;
-        });
-        _refreshAnimationController.stop();
-        _refreshAnimationController.reset();
-      }
+      // 停止刷新状态并停止动画（同时更新 PlayerScreen 和 StatefulBuilder）
+      setState(() {
+        _isRefreshing = false;
+      });
+      aSetState(() {});
+      _refreshAnimationController.stop();
+      _refreshAnimationController.reset();
     }
   }
 
@@ -2427,7 +2564,15 @@ class _PlayerScreenState extends State<PlayerScreen>
         });
 
         // 如果面板正在显示，同步更新面板
-        stateSetter?.call(() {});
+        // 使用 try-catch 防止面板已关闭时调用 setState 导致异常
+        if (stateSetter != null) {
+          try {
+            stateSetter(() {});
+          } catch (e) {
+            // 面板已关闭，忽略异常
+            debugPrint('源列表排序: 面板已关闭，跳过更新');
+          }
+        }
 
         debugPrint('源列表已按速度排序');
       }
@@ -3484,6 +3629,83 @@ class _SourceCardWithHoverState extends State<_SourceCardWithHover> {
             ),
           ),
         ));
+  }
+}
+
+/// 横向滚动按钮（PC 端专用）
+class _ScrollButton extends StatefulWidget {
+  final bool isDarkMode;
+  final AxisDirection direction;
+  final VoidCallback onTap;
+
+  const _ScrollButton({
+    required this.isDarkMode,
+    required this.direction,
+    required this.onTap,
+  });
+
+  @override
+  State<_ScrollButton> createState() => _ScrollButtonState();
+}
+
+class _ScrollButtonState extends State<_ScrollButton> {
+  bool _isHovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _isHovered = true),
+      onExit: (_) => setState(() => _isHovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Container(
+          width: 24,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: widget.direction == AxisDirection.left
+                  ? Alignment.centerRight
+                  : Alignment.centerLeft,
+              end: widget.direction == AxisDirection.left
+                  ? Alignment.centerLeft
+                  : Alignment.centerRight,
+              colors: [
+                (widget.isDarkMode ? Colors.black : Colors.white)
+                    .withValues(alpha: _isHovered ? 0.8 : 0.5),
+                (widget.isDarkMode ? Colors.black : Colors.white)
+                    .withValues(alpha: 0.0),
+              ],
+            ),
+          ),
+          child: Center(
+            child: Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: widget.isDarkMode
+                    ? Colors.grey[800]!.withValues(alpha: 0.9)
+                    : Colors.white.withValues(alpha: 0.9),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 4,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Icon(
+                widget.direction == AxisDirection.left
+                    ? Icons.chevron_left
+                    : Icons.chevron_right,
+                size: 20,
+                color: widget.isDarkMode ? Colors.white : Colors.black87,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 

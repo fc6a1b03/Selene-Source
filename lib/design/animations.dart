@@ -283,17 +283,29 @@ class HoverAnimation extends StatefulWidget {
 }
 
 class _HoverAnimationState extends State<HoverAnimation> {
-  bool _isHovered = false;
+  final ValueNotifier<bool> _isHovered = ValueNotifier<bool>(false);
+
+  @override
+  void dispose() {
+    _isHovered.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: AnimatedScale(
-        scale: _isHovered ? widget.scale : 1.0,
-        duration: widget.duration,
-        curve: AppAnimations.standard,
+      onEnter: (_) => _isHovered.value = true,
+      onExit: (_) => _isHovered.value = false,
+      child: AnimatedBuilder(
+        animation: _isHovered,
+        builder: (context, child) {
+          return AnimatedScale(
+            scale: _isHovered.value ? widget.scale : 1.0,
+            duration: widget.duration,
+            curve: AppAnimations.standard,
+            child: child,
+          );
+        },
         child: widget.child,
       ),
     );

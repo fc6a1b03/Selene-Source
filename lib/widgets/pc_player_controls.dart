@@ -657,22 +657,9 @@ class _PCPlayerControlsState extends State<PCPlayerControls> {
       return ColoredBox(
         color: Colors.black.withValues(alpha: 0.7),
         child: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircularProgressIndicator(
-                color: Colors.white,
-                strokeWidth: 3,
-              ),
-              SizedBox(height: 16),
-              Text(
-                '加载中...',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                ),
-              ),
-            ],
+          child: CircularProgressIndicator(
+            color: Colors.white,
+            strokeWidth: 3,
           ),
         ),
       );
