@@ -202,20 +202,22 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
         });
       }
 
-      // 设置当前频道标签并触发自动测速
-      if (mounted) {
-        final currentChannelName = _currentChannel.name;
-        final sameNameChannels = allChannelsByNameMap[currentChannelName] ?? [];
-        if (sameNameChannels.length > 1) {
-          // 有多个同名源，设置标签并触发测速
-          setState(() {
-            _currentTabChannelName = currentChannelName;
-            _filteredChannels = sameNameChannels;
-          });
-          // 触发自动测速
-          await _autoTestAndSelectBestSource();
-        }
-      }
+      // 注：不再自动切换到同名频道标签页模式
+      // 频道列表应该显示完整的频道列表，而不是只显示当前频道的所有源
+      // 如果需要查看当前频道的所有源，可以通过其他方式（如点击频道名称）来切换
+      //
+      // 保留自动测速逻辑，但不切换标签页模式
+      // if (mounted) {
+      //   final currentChannelName = _currentChannel.name;
+      //   final sameNameChannels = allChannelsByNameMap[currentChannelName] ?? [];
+      //   if (sameNameChannels.length > 1) {
+      //     setState(() {
+      //       _currentTabChannelName = currentChannelName;
+      //       _filteredChannels = sameNameChannels;
+      //     });
+      //     await _autoTestAndSelectBestSource();
+      //   }
+      // }
     } catch (e) {
       debugPrint('加载所有源的频道列表失败: $e');
     }
@@ -233,14 +235,34 @@ class _LivePlayerScreenState extends State<LivePlayerScreen>
 
     if (!mounted) return;
 
+    // 检查新频道是否有多个同名源
+    final channelName = channel.name;
+    final sameNameChannels = _channelsByNameMap[channelName] ?? [];
+    final hasMultipleSources = sameNameChannels.length > 1;
+
     setState(() {
       _currentChannel = channel;
       _isLoading = true;
       _loadingMessage = '切换频道...';
+
+      // 如果新频道有多个同名源，切换到同名频道标签页模式
+      if (hasMultipleSources) {
+        _currentTabChannelName = channelName;
+        _filteredChannels = sameNameChannels;
+      } else {
+        // 否则退出标签页模式，显示完整频道列表
+        _currentTabChannelName = null;
+        _filteredChannels = _allChannels;
+      }
     });
 
     // 重新加载 EPG
     await _loadEpgData();
+
+    // 如果有多个同名源，自动测速并选择最佳源
+    if (hasMultipleSources) {
+      await _autoTestAndSelectBestSource();
+    }
 
     // 滚动到当前频道
     _scrollToCurrentChannel();

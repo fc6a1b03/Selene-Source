@@ -13,6 +13,7 @@ import 'package:selene/screens/login_screen.dart';
 import 'package:selene/services/api_service.dart';
 import 'package:selene/services/douban_cache_service.dart';
 import 'package:selene/services/local_mode_storage_service.dart';
+import 'package:selene/services/speed_test_cache_service.dart';
 import 'package:selene/services/subscription_service.dart';
 import 'package:selene/services/theme_service.dart';
 import 'package:selene/services/user_data_service.dart';
@@ -28,13 +29,10 @@ void main() async {
   HttpOverrides.global = CustomizeHttpOverrides();
   // 初始化 Flutter
   WidgetsFlutterBinding.ensureInitialized();
-
   // 初始化 Hive - 必须在 runApp 前完成
   await HiveInitializer.init();
-
   // 初始化 media_kit - 必须在 runApp 前完成
   MediaKit.ensureInitialized();
-
   // 初始化 macOS 窗口配置 - 必须在 runApp 前完成
   if (Platform.isMacOS) {
     await WindowManipulator.initialize(enableWindowDelegate: true);
@@ -42,9 +40,7 @@ void main() async {
     await WindowManipulator.enableFullSizeContentView();
     await WindowManipulator.hideTitle();
   }
-
   runApp(const SeleneApp());
-
   // Windows 窗口配置 - 可以在 runApp 后
   if (Platform.isWindows) {
     doWhenWindowReady(() {
@@ -57,7 +53,6 @@ void main() async {
       win.show();
     });
   }
-
   // 延迟初始化非关键服务，避免阻塞启动
   await Future<void>.delayed(Duration.zero);
   _initializeDeferredServices();
@@ -69,6 +64,8 @@ void _initializeDeferredServices() async {
   final cacheService = DoubanCacheService();
   await cacheService.init();
   cacheService.startPeriodicCleanup();
+  // 初始化测速缓存服务 - 延迟执行
+  await SpeedTestCacheService.init();
 }
 
 // 主应用程序组件

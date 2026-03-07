@@ -3,6 +3,7 @@ import 'package:selene/models/favorite_item.dart';
 import 'package:selene/models/live_source.dart';
 import 'package:selene/models/play_record.dart';
 import 'package:selene/models/search_resource.dart';
+import 'package:selene/models/speed_test_cache.dart';
 
 class FavoriteItemAdapter extends TypeAdapter<FavoriteItem> {
   @override
@@ -166,6 +167,57 @@ class SearchResourceAdapter extends TypeAdapter<SearchResource> {
       detail: detail,
       from: from,
       disabled: disabled,
+    );
+  }
+}
+
+/// 测速缓存组 Hive Adapter
+class SpeedTestCacheGroupAdapter extends TypeAdapter<SpeedTestCacheGroup> {
+  @override
+  final int typeId = 5;
+
+  @override
+  void write(BinaryWriter writer, SpeedTestCacheGroup obj) {
+    // 写入 sourceKey
+    writer.writeString(obj.sourceKey);
+    // 写入 sourceUrl
+    writer.writeString(obj.sourceUrl);
+    // 写入 items 列表长度
+    writer.writeInt(obj.items.length);
+    // 写入每个 item
+    for (final item in obj.items) {
+      writer.writeString(item.channelId);
+      writer.writeBool(item.isAvailable);
+      writer.writeInt(item.latencyMs);
+      writer.writeInt(item.testTime.millisecondsSinceEpoch);
+    }
+    // 写入 lastUpdated
+    writer.writeInt(obj.lastUpdated.millisecondsSinceEpoch);
+  }
+
+  @override
+  SpeedTestCacheGroup read(BinaryReader reader) {
+    final sourceKey = reader.readString();
+    final sourceUrl = reader.readString();
+    final itemsLength = reader.readInt();
+    final items = <SpeedTestCacheItem>[];
+
+    for (var i = 0; i < itemsLength; i++) {
+      items.add(SpeedTestCacheItem(
+        channelId: reader.readString(),
+        isAvailable: reader.readBool(),
+        latencyMs: reader.readInt(),
+        testTime: DateTime.fromMillisecondsSinceEpoch(reader.readInt()),
+      ));
+    }
+
+    final lastUpdated = DateTime.fromMillisecondsSinceEpoch(reader.readInt());
+
+    return SpeedTestCacheGroup(
+      sourceKey: sourceKey,
+      sourceUrl: sourceUrl,
+      items: items,
+      lastUpdated: lastUpdated,
     );
   }
 }
