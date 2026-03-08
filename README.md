@@ -10,7 +10,7 @@
 
 ## 快速开始
 
-1. 安装 Flutter（见 https://flutter.dev）并配置平台工具链（Android SDK、Xcode、Visual Studio 等）。
+1. 安装 Flutter（见 https://flutter.dev ）并配置平台工具链（Android SDK、Xcode、Visual Studio 等）。
 2. 在仓库根目录运行：
 
    flutter pub get
