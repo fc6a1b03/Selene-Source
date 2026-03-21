@@ -1,202 +1,326 @@
 # Selene - AI Agent Development Guide
 
-> **Language**: This project uses **Chinese** for all documentation and comments. Please maintain this convention when
-> modifying code.
+> **Language**: 本项目使用 **中文** 作为所有文档和注释的主要语言。修改代码时请保持此约定。
 
 ## Project Overview
 
-**Selene** is a cross-platform video player application based on MoonTV ("基于 MoonTV 的视频播放器"), built with
-Flutter. It supports video streaming, live TV, search functionality, and user data management across multiple platforms.
+**Selene** 是一个基于 Flutter 开发的跨平台视频播放器应用（基于 MoonTV 的视频播放器），支持视频点播、直播电视、内容搜索和用户数据管理等功能。
 
 - **Name**: selene
 - **Version**: 1.6.6+2156
 - **Flutter SDK**: >=3.4.3 <4.0.0
+- **Dart SDK**: >=3.4.3
 - **Package Manager**: pub (pubspec.yaml)
 
 ### Core Features
 
-- Video playback with media_kit (cross-platform video player)
-- Live TV streaming with EPG (Electronic Program Guide)
-- Content search with multiple source aggregation
-- User favorites and play history
-- Dark/Light theme support (follows system by default)
-- Multi-platform support: Android, iOS, macOS, Windows, Linux, Web
-- DLNA casting support
-- Picture-in-picture mode
-- Local mode (subscription-based without server)
+- 跨平台视频播放（基于 media_kit）
+- 直播电视流播放与 EPG（电子节目指南）
+- 多源聚合内容搜索
+- 用户收藏与播放历史
+- 深色/浅色主题切换（默认跟随系统）
+- 多平台支持：Android、iOS、macOS、Windows、Linux、Web
+- DLNA 投屏支持
+- 画中画模式（PiP）
+- 本地模式（基于订阅源，无需服务器）
 
 ## Technology Stack
 
 ### Core Dependencies
 
-| Category          | Package                                 | Purpose                           |
-|-------------------|-----------------------------------------|-----------------------------------|
-| State Management  | `provider`                              | Reactive state management         |
-| Video Player      | `media_kit`                             | Cross-platform video playback     |
-| Local Storage     | `hive`                                  | NoSQL local database              |
-| HTTP Client       | `dio`, `http`                           | API communication                 |
-| UI Icons          | `lucide_icons_flutter`, `flutter_svg`   | Iconography                       |
-| Window Management | `bitsdojo_window`, `macos_window_utils` | Desktop window controls           |
-| Downloads         | `gal`                                   | Media saving to gallery           |
-| Casting           | `dlna_dart`                             | DLNA device discovery and casting |
-| Brightness        | `screen_brightness`                     | Screen brightness control         |
-| Volume            | `volume_controller`                     | System volume control             |
+| Category          | Package                                 | Purpose      |
+|-------------------|-----------------------------------------|--------------|
+| State Management  | `provider`                              | 响应式状态管理      |
+| Video Player      | `media_kit`                             | 跨平台视频播放      |
+| Local Storage     | `hive`                                  | NoSQL 本地数据库  |
+| HTTP Client       | `dio`, `http`                           | API 通信       |
+| UI Icons          | `lucide_icons_flutter`                  | 图标库          |
+| Window Management | `bitsdojo_window`, `macos_window_utils` | 桌面窗口控制       |
+| Downloads         | `gal`                                   | 媒体保存到相册      |
+| Casting           | `dlna_dart`                             | DLNA 设备发现与投屏 |
+| Brightness        | `screen_brightness`                     | 屏幕亮度控制       |
+| Volume            | `volume_controller`                     | 系统音量控制       |
 
 ### Platform Support
 
-- **Android**: minSdk 21, targetSdk latest, Kotlin DSL build scripts
-- **iOS**: Standard Flutter iOS project, CocoaPods
-- **macOS**: Custom window styling with macos_window_utils
-- **Windows**: Custom window sizing with bitsdojo_window
-- **Linux**: Standard Flutter Linux project
-- **Web**: CanvasKit renderer
+| Platform    | Requirements                                 |
+|-------------|----------------------------------------------|
+| **Android** | minSdk 21, targetSdk 36, Kotlin DSL, Java 17 |
+| **iOS**     | Xcode 15+, CocoaPods                         |
+| **macOS**   | Xcode 15+, 支持 ARM64 和 x86_64 双架构             |
+| **Windows** | Visual Studio 2022 (C++ 桌面开发)                |
+| **Linux**   | clang, cmake, ninja-build, GTK 开发库           |
+| **Web**     | CanvasKit 渲染器                                |
 
 ## Project Structure
 
 ```
 lib/
-├── main.dart                    # Application entry point
+├── main.dart                    # 应用入口点
 ├── components/
-│   └── animations/              # Custom animation widgets
+│   └── animations/              # 自定义动画组件
+│       ├── glass_card.dart
+│       ├── modern_loading_animation.dart
+│       ├── neon_button.dart
+│       └── video_loading_animation.dart
 ├── design/                      # Design System 2026
-│   ├── animations.dart          # Shared animations
-│   ├── colors.dart              # Color palette (light/dark/glassmorphism)
-│   ├── design_system.dart       # Library exports
-│   ├── shadows.dart             # Shadow definitions
-│   └── typography.dart          # Text styles
-├── models/                      # Data models
-│   ├── video_info.dart          # Video metadata
-│   ├── play_record.dart         # Playback history
-│   ├── favorite_item.dart       # User favorites
-│   ├── search_result.dart       # Search results
-│   ├── live_channel.dart        # Live TV channels
-│   ├── live_source.dart         # Live TV sources
+│   ├── animations.dart          # 共享动画
+│   ├── colors.dart              # 颜色系统（青绿-蓝色系）
+│   ├── design_system.dart       # 设计系统导出
+│   ├── shadows.dart             # 阴影定义
+│   └── typography.dart          # 文本样式
+├── mixins/
+│   └── player_control_mixin.dart # 播放器控制混入
+├── models/                      # 数据模型
+│   ├── video_info.dart          # 视频元数据
+│   ├── play_record.dart         # 播放历史
+│   ├── favorite_item.dart       # 用户收藏
+│   ├── search_result.dart       # 搜索结果
+│   ├── live_channel.dart        # 直播频道
+│   ├── live_source.dart         # 直播源
+│   ├── aggregated_search_result.dart  # 聚合搜索结果
+│   ├── bangumi.dart             # Bangumi 数据
+│   ├── douban_movie.dart        # 豆瓣电影数据
+│   └── speed_test_cache.dart    # 测速缓存
+├── screens/                     # 全屏页面
+│   ├── home_screen.dart         # 主屏幕（带标签页）
+│   ├── player_screen.dart       # 视频播放器
+│   ├── search_screen.dart       # 搜索界面
+│   ├── live_screen.dart         # 直播电视浏览
+│   ├── live_player_screen.dart  # 直播播放器
+│   ├── login_screen.dart        # 登录/本地模式
+│   ├── movie_screen.dart        # 电影分类
+│   ├── tv_screen.dart           # 电视剧分类
+│   ├── anime_screen.dart        # 动漫分类
+│   ├── show_screen.dart         # 综艺分类
+│   └── admin_screen.dart        # 管理后台
+├── services/                    # 业务逻辑服务
+│   ├── api_service.dart         # HTTP API 客户端
+│   ├── theme_service.dart       # 主题管理
+│   ├── user_data_service.dart   # 本地用户数据
+│   ├── page_cache_service.dart  # 页面数据缓存
+│   ├── douban_service.dart      # 豆瓣集成
+│   ├── douban_cache_service.dart # 豆瓣缓存
+│   ├── bangumi_service.dart     # Bangumi 集成
+│   ├── search_service.dart      # 搜索功能
+│   ├── live_service.dart        # 直播电视服务
+│   ├── version_service.dart     # 更新检查
+│   ├── subscription_service.dart # 订阅源解析
+│   ├── local_mode_storage_service.dart # 本地模式存储
+│   ├── speed_test_cache_service.dart # 测速缓存
+│   ├── download_service.dart    # 下载服务
+│   ├── dlna_service.dart        # DLNA 投屏（通过 dlna_dart）
 │   └── ...
-├── screens/                     # Full-screen pages
-│   ├── home_screen.dart         # Main screen with tabs
-│   ├── player_screen.dart       # Video player
-│   ├── search_screen.dart       # Search interface
-│   ├── live_screen.dart         # Live TV browser
-│   ├── live_player_screen.dart  # Live TV player
-│   ├── login_screen.dart        # Authentication
-│   ├── movie_screen.dart        # Movies category
-│   ├── tv_screen.dart           # TV shows category
-│   ├── anime_screen.dart        # Anime category
-│   └── show_screen.dart         # Variety shows category
-├── services/                    # Business logic
-│   ├── api_service.dart         # HTTP API client
-│   ├── theme_service.dart       # Theme management
-│   ├── user_data_service.dart   # Local user data
-│   ├── page_cache_service.dart  # Page data caching
-│   ├── douban_service.dart      # Douban integration
-│   ├── bangumi_service.dart     # Bangumi integration
-│   ├── search_service.dart      # Search functionality
-│   ├── live_service.dart        # Live TV streaming
-│   ├── version_service.dart     # Update checking
+├── utils/                       # 工具类
+│   ├── font_utils.dart          # 字体辅助（Poppins/微软雅黑）
+│   ├── hive_adapters.dart       # Hive 类型适配器
+│   ├── hive_initializer.dart    # 数据库初始化
+│   ├── http_overrides.dart      # SSL 证书处理
+│   ├── route_animations.dart    # 页面切换动画
+│   ├── performance_monitor.dart # 性能监控
+│   ├── memory_leak_detector.dart # 内存泄漏检测
 │   └── ...
-├── utils/                       # Utilities
-│   ├── font_utils.dart          # Font helpers (Poppins/Microsoft YaHei)
-│   ├── hive_adapters.dart       # Hive type adapters
-│   ├── hive_initializer.dart    # Database initialization
-│   └── http_overrides.dart      # SSL certificate handling
-└── widgets/                     # Reusable UI components
-    ├── video_card.dart          # Video thumbnail card
-    ├── main_layout.dart         # App shell layout
-    ├── player_controls/         # Platform-specific controls
-    ├── hot_*_section.dart       # Content category sections
+└── widgets/                     # 可复用 UI 组件
+    ├── video_card.dart          # 视频卡片
+    ├── main_layout.dart         # 应用外壳布局
+    ├── mobile_player_controls.dart  # 移动端播放器控制
+    ├── pc_player_controls.dart      # PC 端播放器控制
+    ├── bangumi_grid.dart        # Bangumi 网格
+    ├── douban_movies_grid.dart  # 豆瓣电影网格
+    ├── favorites_grid.dart      # 收藏网格
+    ├── history_grid.dart        # 历史记录网格
+    ├── hot_*_section.dart       # 各类热门内容区块
     └── ...
 ```
 
 ## Build Commands
 
+### 编码前环境检查
+
+**在开始编码之前，必须先运行以下命令检查 Flutter 环境版本：**
+
+```bash
+flutter doctor --verbose
+```
+
+**检查要点：**
+
+- ✅ 确认 Flutter SDK 版本与项目要求匹配 (`>=3.4.3 <4.0.0`)
+- ✅ 确认 Dart SDK 版本兼容
+- ✅ 检查所有平台工具链是否正常（Android SDK、Xcode、Visual Studio 等）
+- ✅ 确认 `flutter` 和 `dart` 命令可用
+
+**版本兼容性说明：**
+
+| 环境          | 项目要求             | 说明          |
+|-------------|------------------|-------------|
+| Flutter SDK | `>=3.4.3 <4.0.0` | 当前使用 3.38.9 |
+| Dart SDK    | `>=3.4.3`        | 当前使用 3.11.0 |
+
+> ⚠️ **重要**: 编码时必须确保语法与当前 Flutter/Dart 版本匹配，避免使用过时的 API 或语法。如遇到不兼容的语法错误，请先检查
+`flutter doctor` 输出确认版本。
+
 ### Development
 
 ```bash
-# Install dependencies
+# 安装依赖
 flutter pub get
 
-# Run on connected device
+# 运行到已连接设备
 flutter run
 
-# Run with specific device
+# 运行到指定设备
 flutter run -d <device-id>
 
-# Analyze code
+# 代码分析
 flutter analyze
 
-# Format code
+# 格式化代码
 dart format lib/
 ```
 
 ### Production Builds
 
-The project includes a comprehensive build script (`build.sh`) for local builds:
+项目提供完整的构建脚本 (`build.sh`)：
 
 ```bash
-# Build all platforms (parallel)
+# 构建所有平台（并行）
 ./build.sh
 
-# Platform-specific builds
-./build.sh --android-only       # Android APK (arm64, armv7)
-./build.sh --ios-only           # iOS unsigned IPA
-./build.sh --macos-only         # Both macOS architectures
+# 平台特定构建
+./build.sh --android-only       # Android APK (arm64, armv7) + AAB
+./build.sh --ios-only           # iOS 无签名 IPA
+./build.sh --macos-only         # macOS 双架构
 ./build.sh --macos-arm64-only   # Apple Silicon
 ./build.sh --macos-x86_64-only  # Intel Mac
 ./build.sh --apple-only         # iOS + macOS
-./build.sh --sequential         # Sequential instead of parallel
+./build.sh --windows-only       # Windows
+./build.sh --linux-only         # Linux
+./build.sh --web-only           # Web
+./build.sh --sequential         # 顺序构建（非并行）
+./build.sh --no-clean           # 跳过清理（快速构建）
 ```
 
 ### Manual Flutter Builds
 
 ```bash
 # Android
-flutter build apk --release --target-platform android-arm64,android-arm --split-per-abi
-flutter build appbundle --release
+flutter build apk --release --target-platform android-arm64,android-arm --split-per-abi --no-tree-shake-icons
+flutter build appbundle --release --no-tree-shake-icons
 
-# iOS (macOS only)
+# iOS（仅 macOS）
 flutter build ios --release --no-codesign
 
-# macOS (macOS only)
+# macOS（仅 macOS）
 flutter build macos --release
 
-# Windows
-flutter build windows --release
+# Windows（仅 Windows）
+flutter build windows --release --no-tree-shake-icons
 
-# Linux
+# Linux（仅 Linux）
 flutter build linux --release
 
 # Web
 flutter build web --release --web-renderer canvaskit
 ```
 
-## Coding Requirements
+**注意**: 使用 `media_kit` 构建时必须加上 `--no-tree-shake-icons` 参数，否则图标资源会被误删。
 
-### Performance Standards
+## Code Style Guidelines
+
+### Language Conventions
+
+- **注释**: 使用中文编写所有内联注释和文档
+- **用户界面字符串**: 使用中文
+- **变量名**: 使用驼峰命名法 (camelCase)，描述性英文名称
+- **文件名**: 所有 Dart 文件使用蛇形命名法 (snake_case)
+
+### Analysis Configuration
+
+项目使用严格的分析规则 (`analysis_options.yaml`)：
+
+```yaml
+# 关键强制规则
+- always_declare_return_types: true      # 必须声明返回类型
+- always_use_package_imports: true       # 禁止使用相对导入
+- avoid_relative_lib_imports: true       # 仅使用 package 导入
+- prefer_final_fields: true              # 尽可能使用不可变字段
+- prefer_final_locals: true              # 局部变量使用 final
+- prefer_single_quotes: true             # 字符串使用单引号
+- use_key_in_widget_constructors: true   # Widget 必须提供 Key 参数
+- use_build_context_synchronously: true  # 正确处理异步 context
+```
+
+### Design System Usage
+
+导入设计系统以保持 UI 一致性：
+
+```
+import 'package:selene/design/design_system.dart';
+
+// 颜色
+Container(
+  color: AppColors.primary,
+  decoration: BoxDecoration(
+    gradient: AppColors.primaryGradient,
+  ),
+)
+
+// 字体
+Text('标题', style: AppTypography.headlineMediumStyle(isDark: true))
+
+// 阴影
+Container(
+  decoration: BoxDecoration(
+    boxShadow: AppShadows.medium,
+  ),
+)
+```
+
+### Font Guidelines
+
+使用 FontUtils 保持字体一致性：
+
+```
+import 'package:selene/utils/font_utils.dart';
+
+// 主要字体（Windows 使用微软雅黑，其他使用 Poppins）
+Text('Hello', style: FontUtils.poppins(fontSize: 16))
+
+// 等宽字体
+Text('Code', style: FontUtils.sourceCodePro(fontSize: 14))
+```
+
+## Performance Standards
 
 **新特性开发必须遵循高性能、低损耗原则：**
 
-- **Widget 构建优化**
-    - 使用 `const` 构造函数减少重建
-    - 合理使用 `ListView.builder` 替代 `Column` 处理长列表
-    - 避免在 `build` 方法中执行复杂计算
-    - 使用 `RepaintBoundary` 隔离频繁重绘区域
+### Widget 构建优化
 
-- **状态管理优化**
-    - 精确控制 `notifyListeners()` 调用时机
-    - 使用 `Selector` 替代 `Consumer` 监听特定字段
-    - 避免在 `didUpdateWidget` 中触发状态更新
+- 使用 `const` 构造函数减少重建
+- 长列表使用 `ListView.builder` 替代 `Column`
+- 避免在 `build` 方法中执行复杂计算
+- 使用 `RepaintBoundary` 隔离频繁重绘区域
+- 使用 `Selector` 替代 `Consumer` 监听特定字段
 
-- **资源管理**
-    - 及时释放控制器（`VideoPlayerController`、`ScrollController` 等）
-    - 使用 `CachedNetworkImage` 替代原生长图片加载
-    - 图片使用适当分辨率，避免内存溢出
+### 状态管理优化
 
-- **异步操作**
-    - 使用 `FutureBuilder`/`StreamBuilder` 管理异步状态
-    - 取消未完成的异步请求避免内存泄漏
-    - 耗时操作移至 Isolate（如 JSON 解析、图片处理）
+- 精确控制 `notifyListeners()` 调用时机
+- 避免在 `didUpdateWidget` 中触发状态更新
 
-### Code Quality Gates
+### 资源管理
+
+- 及时释放控制器（`VideoPlayerController`、`ScrollController` 等）
+- 使用 `CachedNetworkImage` 替代原生长图片加载
+- 图片使用适当分辨率，避免内存溢出
+
+### 异步操作
+
+- 使用 `FutureBuilder`/`StreamBuilder` 管理异步状态
+- 取消未完成的异步请求避免内存泄漏
+- 耗时操作移至 Isolate（如 JSON 解析、图片处理）
+
+## Code Quality Gates
 
 **每个开发阶段必须通过 `flutter analyze` 检查：**
 
@@ -224,157 +348,91 @@ dart fix --apply
 dart format lib/
 ```
 
-## Code Style Guidelines
-
-### Language Conventions
-
-- **Comments**: Use Chinese for all inline comments and documentation
-- **Strings**: User-facing strings in Chinese, internal/debug strings can be English
-- **Variable Names**: Use camelCase, descriptive English names
-- **File Names**: snake_case for all Dart files
-
-### Analysis Configuration (analysis_options.yaml)
-
-The project uses strict analysis rules:
-
-```yaml
-# Key enforced rules
-- always_declare_return_types: true      # Must declare return types
-- always_use_package_imports: true       # No relative imports
-- avoid_relative_lib_imports: true       # Package imports only
-- prefer_final_fields: true              # Immutable where possible
-- prefer_final_locals: true              # Final for local variables
-- prefer_single_quotes: true             # Single quotes for strings
-- use_key_in_widget_constructors: true   # Key parameter required
-- use_build_context_synchronously: true  # Proper async context usage
-```
-
-### Design System Usage
-
-Import the design system for consistent UI:
-
-```dart
-import 'package:selene/design/design_system.dart';
-
-// Colors
-AppColors.primary
-AppColors.lightBackground
-AppColors.darkSurface
-
-// Glassmorphism
-ColorUtils.glassmorphism(isDark: true)
-
-// Theme extensions
-Theme.of(context).colorScheme.surfaceColor
-```
-
-### Font Guidelines
-
-Use the FontUtils for consistent typography:
-
-```dart
-import 'package:selene/utils/font_utils.dart';
-
-// Primary font (Poppins on non-Windows, Microsoft YaHei on Windows)
-Text('Hello', style: FontUtils.poppins(fontSize: 16))
-
-// Monospace font
-Text('Code', style: FontUtils.sourceCodePro(fontSize:14))
-```
-
 ## Testing Instructions
 
 ### Current State
 
-- **Unit Tests**: Minimal coverage (CI runs `flutter test` with `|| true`)
-- **Widget Tests**: Not currently implemented
-- **Integration Tests**: Not currently implemented
+- **Unit Tests**: 尚未实现
+- **Widget Tests**: 尚未实现
+- **Integration Tests**: 尚未实现
+
+CI/CD 中测试步骤使用 `|| true` 确保不会因测试缺失而失败。
 
 ### Running Tests
 
 ```bash
-# Run all tests
+# 运行所有测试
 flutter test
 
-# Run with coverage
+# 运行带覆盖率报告
 flutter test --coverage
 
-# Generate coverage report (requires lcov)
+# 生成覆盖率 HTML 报告（需要 lcov）
 genhtml coverage/lcov.info -o coverage/html
 ```
-
-### CI/CD Testing
-
-The GitHub Actions workflow runs:
-
-1. Code analysis (`flutter analyze --fatal-infos --fatal-warnings`)
-2. Formatting check (`dart format --set-exit-if-changed`)
-3. Unit tests (`flutter test --coverage`)
 
 ## Security Considerations
 
 ### SSL/TLS Handling
 
-The app globally disables certificate validation for development:
+应用全局禁用证书验证（开发便利）：
 
-```dart
+```
 // lib/main.dart
-HttpOverrides.global =
-
-CustomizeHttpOverrides(); // Disables certificate checks
+HttpOverrides.global = CustomizeHttpOverrides(); // 禁用证书检查
 ```
 
-**Warning**: This is for development convenience. Production deployments should implement proper certificate pinning.
+**警告**: 此配置仅用于开发便利。生产部署应实现适当的证书固定。
 
 ### Code Obfuscation
 
-Release builds include code obfuscation:
+发布构建启用代码混淆：
 
 ```bash
 flutter build apk --obfuscate --split-debug-info=build/app/outputs/symbols
 ```
 
-Debug symbols are uploaded as CI artifacts for crash analysis.
+调试符号作为 CI 产物上传，用于崩溃分析。
 
 ### Data Storage
 
-- User credentials stored in Hive (local encrypted storage)
-- Cookies managed by UserDataService
-- No sensitive data logged in release builds
+- 用户凭证存储在 Hive（本地加密存储）
+- Cookie 由 UserDataService 管理
+- 发布版本不记录敏感数据日志
 
 ### Dependencies
 
-CI includes a security audit step:
+CI 包含安全审计步骤：
 
 ```bash
-flutter pub audit  # Checks for known vulnerabilities
+flutter pub audit  # 检查已知漏洞
 ```
 
 ## Key Services Reference
 
 ### ApiService
 
-Central HTTP client with automatic authentication:
+通用 HTTP 客户端，自动处理认证：
 
-```dart
-// GET request
-final response = await
-ApiService.get<List<SearchResult>>
-('/api/search',fromJson: (data) => /* parse logic */,);
+```
+// GET 请求
+final response = await ApiService.get<List<SearchResult>>(
+  '/api/search',
+  fromJson: (data) => /* 解析逻辑 */,
+);
 
-// POST request
+// POST 请求
 final response = await ApiService.post<void>(
-'/api/favorites',
-body: {'key': key, 'favorite': favoriteData},
+  '/api/favorites',
+  body: {'key': key, 'favorite': favoriteData},
 );
 ```
 
 ### PageCacheService
 
-Manages local caching for favorites, history, and search:
+管理收藏、历史和搜索的本地缓存：
 
-```dart
-
+```
 final cacheService = PageCacheService();
 await cacheService.refreshFavorites(context);
 await cacheService.refreshPlayRecords(context);
@@ -382,178 +440,112 @@ await cacheService.refreshPlayRecords(context);
 
 ### ThemeService
 
-Theme management via Provider:
+通过 Provider 管理主题：
 
-```dart
-// Toggle theme
+```
+// 切换主题
 context.read<ThemeService>().toggleTheme(context);
 
-// Check current mode
+// 检查当前模式
 final isDark = context.read<ThemeService>().isDarkMode;
 ```
 
 ## Local Development Mode
 
-The app supports a "local mode" that works without a backend server:
+应用支持"本地模式"，无需后端服务器即可工作：
 
-1. User provides a subscription URL
-2. App parses M3U/search sources from subscription
-3. Content is fetched directly from source URLs
+1. 用户提供订阅源 URL
+2. 应用从订阅源解析 M3U/搜索源
+3. 内容直接从源 URL 获取
 
-Enable via login screen -> "Local Mode" option.
+在登录屏幕通过"本地模式"选项启用。
+
+## CI/CD Pipeline
+
+GitHub Actions 工作流：
+
+- **ci-cd.yml**: 完整流水线（push 到 main/develop/release 分支）
+    - 代码分析和测试
+    - 安全审计
+    - 6 个平台并行构建
+    - 标签推送时自动创建 Release
+
+- **pr-check.yml**: PR 轻量验证
+    - 分析和格式检查
+    - 冒烟构建测试
+
+构建矩阵：Android (APK + AAB)、iOS (IPA)、macOS (ARM64 + x86_64 DMG)、Windows (ZIP)、Linux (tar.gz)、Web (tar.gz)
 
 ## Common Tasks
 
 ### Adding a New Screen
 
-1. Create file in `lib/screens/`
-2. Add route navigation in relevant screen
-3. Update imports to use package imports: `import 'package:selene/screens/new_screen.dart';`
+1. 在 `lib/screens/` 创建文件
+2. 在相关页面添加路由导航
+3. 使用 package 导入：`import 'package:selene/screens/new_screen.dart';`
 
 ### Adding a Model
 
-1. Create model class in `lib/models/`
-2. Add `fromJson`/`toJson` methods
-3. Create Hive adapter in `lib/utils/hive_adapters.dart` if persistence needed
-4. Register adapter in `lib/utils/hive_initializer.dart`
+1. 在 `lib/models/` 创建模型类
+2. 添加 `fromJson`/`toJson` 方法
+3. 如需持久化，在 `lib/utils/hive_adapters.dart` 创建 Hive 适配器
+4. 在 `lib/utils/hive_initializer.dart` 注册适配器
 
 ### Adding an API Endpoint
 
-1. Add method to `ApiService` with proper generic typing
-2. Return `ApiResponse<T>` with appropriate type
-3. Handle 401 unauthorized in `_handleResponse`
+1. 在 `ApiService` 添加方法，使用适当的泛型类型
+2. 返回 `ApiResponse<T>` 并指定类型
+3. 在 `_handleResponse` 中处理 401 未授权
 
 ## Troubleshooting
 
 ### Build Issues
 
 ```bash
-# Clean build artifacts
+# 清理构建产物
 flutter clean
 rm -rf build/ ios-build/ build-arm64/ build-x86_64/
 
-# Regenerate platform files
+# 重新生成平台文件
 flutter pub get
 ```
 
 ### Dependency Issues
 
 ```bash
-# Update dependencies
+# 更新依赖
 flutter pub upgrade
 
-# Check for outdated packages
+# 检查过时包
 flutter pub outdated
 ```
 
 ### Platform-Specific
 
-**Android**: Ensure Java 17 is installed and `JAVA_HOME` is set
-**iOS/macOS**: Requires Xcode, run `pod install` in ios/ directory
-**Windows**: Requires Visual Studio with C++ desktop development
-**Linux**: Requires clang, cmake, ninja-build, GTK development headers
-
-## CI/CD Pipeline
-
-GitHub Actions workflows:
-
-- **ci-cd.yml**: Full pipeline on push to main/develop/release branches
-    - Code analysis and testing
-    - Security audit
-    - Parallel builds for all 6 platforms
-    - Automatic release creation on tags
-
-- **pr-check.yml**: Lightweight validation on pull requests
-    - Analysis and formatting checks
-    - Smoke build test
-
-Build matrix: Android (APK + AAB), iOS (IPA), macOS (ARM64 + x86_64 DMG), Windows (ZIP), Linux (tar.gz), Web (tar.gz)
+**Android**: 确保安装 Java 17 并设置 `JAVA_HOME`
+**iOS/macOS**: 需要 Xcode，在 ios/ 目录运行 `pod install`
+**Windows**: 需要 Visual Studio 并安装 C++ 桌面开发工作负载
+**Linux**: 需要 clang、cmake、ninja-build、GTK 开发头文件
 
 ## Dependencies Overview
 
 ### SDK & Framework
 
-| Package     | Version | Description          |
-|-------------|---------|----------------------|
-| Flutter SDK | 3.41.2  | UI framework         |
-| Dart SDK    | 3.11.0  | Programming language |
+| Package     | Version | Description |
+|-------------|---------|-------------|
+| Flutter SDK | 3.38.9  | UI 框架       |
+| Dart SDK    | 3.11.0  | 编程语言        |
 
-### Core Dependencies
-
-| Package                | Version | Purpose         |
-|------------------------|---------|-----------------|
-| `provider`             | 6.1.5+1 | 状态管理            |
-| `media_kit`            | 1.2.6   | 跨平台视频播放         |
-| `media_kit_video`      | 2.0.1   | 视频播放器 UI        |
-| `media_kit_libs_video` | 1.0.7   | 视频播放原生库         |
-| `hive`                 | 2.2.3   | NoSQL 本地数据库     |
-| `hive_flutter`         | 1.1.0   | Hive Flutter 集成 |
-| `dio`                  | 5.9.1   | 强大的 HTTP 客户端    |
-| `http`                 | 1.6.0   | 标准 HTTP 客户端     |
-
-### UI & Design
-
-| Package                | Version | Purpose    |
-|------------------------|---------|------------|
-| `flutter_svg`          | 2.2.3   | SVG 图片支持   |
-| `lucide_icons_flutter` | 3.1.10  | Lucide 图标库 |
-| `google_fonts`         | 8.0.2   | Google 字体  |
-| `cupertino_icons`      | 1.0.8   | iOS 风格图标   |
-| `cached_network_image` | 3.4.1   | 图片缓存加载     |
-
-### Platform & Device
-
-| Package              | Version | Purpose      |
-|----------------------|---------|--------------|
-| `bitsdojo_window`    | 0.1.6   | Windows 窗口控制 |
-| `macos_window_utils` | 1.9.1   | macOS 窗口工具   |
-| `screen_brightness`  | 2.1.7   | 屏幕亮度控制       |
-| `volume_controller`  | 3.4.2   | 系统音量控制       |
-| `wakelock_plus`      | 1.4.0   | 保持屏幕常亮       |
-| `gal`                | 2.3.2   | 保存媒体到相册      |
-| `path_provider`      | 2.1.5   | 获取系统路径       |
-| `package_info_plus`  | 9.0.0   | 应用信息获取       |
-| `url_launcher`       | 6.3.2   | 外部链接启动       |
-| `file_selector`      | 1.1.0   | 文件选择器        |
-
-### Network & Data
-
-| Package              | Version | Purpose      |
-|----------------------|---------|--------------|
-| `web_socket_channel` | 3.0.3   | WebSocket 通信 |
-| `xml`                | 6.6.1   | XML 解析       |
-| `encrypt`            | 5.0.3   | 加密解密         |
-| `crypto`             | 3.0.7   | 哈希算法         |
-| `dlna_dart`          | 0.1.0   | DLNA 投屏      |
-
-### Utilities
-
-| Package                      | Version | Purpose     |
-|------------------------------|---------|-------------|
-| `intl`                       | 0.20.2  | 国际化与格式化     |
-| `uuid`                       | 4.5.3   | UUID 生成     |
-| `flutter_cache_manager`      | 3.4.1   | 缓存管理        |
-| `scrollable_positioned_list` | 0.3.8   | 可定位滚动列表     |
-| `gpt_markdown`               | 1.1.5   | Markdown 渲染 |
-| `bs58check`                  | 1.0.2   | Base58 编码校验 |
-| `gbk_codec`                  | 0.4.0   | GBK 编码支持    |
-
-### Development & Testing
-
-| Package                  | Version | Purpose    |
-|--------------------------|---------|------------|
-| `flutter_lints`          | 6.0.0   | 官方 Lint 规则 |
-| `flutter_test`           | (sdk)   | 测试框架       |
-| `flutter_launcher_icons` | 0.14.4  | 应用图标生成     |
-
-### Dependency Graph Summary
+### Core Dependencies Summary
 
 ```
 selene
-├── Core: provider, media_kit*, hive*, dio
+├── Core: provider, media_kit*, hive*, dio, http
 ├── UI: flutter_svg, lucide_icons_flutter, google_fonts, cached_network_image
 ├── Platform: bitsdojo_window, macos_window_utils, screen_brightness, volume_controller
-├── Network: http, web_socket_channel, xml, dlna_dart
+├── Network: web_socket_channel, xml, dlna_dart
 ├── Crypto: encrypt, crypto, bs58check
 └── Utils: intl, uuid, path_provider, package_info_plus, url_launcher
 ```
+
+完整依赖列表见 `pubspec.yaml`。
