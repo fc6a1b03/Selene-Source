@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:gal/gal.dart';
 import 'package:provider/provider.dart';
-
 import 'package:selene/services/theme_service.dart';
 import 'package:selene/utils/font_utils.dart';
 import 'package:selene/utils/image_url.dart';

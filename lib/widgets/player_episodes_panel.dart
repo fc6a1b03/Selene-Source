@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import 'package:selene/utils/device_utils.dart';
 
 class PlayerEpisodesPanel extends StatefulWidget {

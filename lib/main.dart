@@ -16,6 +16,7 @@ import 'package:selene/services/local_mode_storage_service.dart';
 import 'package:selene/services/speed_test_cache_service.dart';
 import 'package:selene/services/subscription_service.dart';
 import 'package:selene/services/theme_service.dart';
+import 'package:selene/services/usb_capture_service.dart';
 import 'package:selene/services/user_data_service.dart';
 import 'package:selene/utils/hive_initializer.dart';
 import 'package:selene/utils/http_overrides.dart';
@@ -56,6 +57,10 @@ void main() async {
   // 延迟初始化非关键服务，避免阻塞启动
   await Future<void>.delayed(Duration.zero);
   _initializeDeferredServices();
+  // 初始化 USB 采集卡服务（Android 平台）
+  if (Platform.isAndroid) {
+    await UsbCaptureService.instance.initialize();
+  }
 }
 
 /// 延迟初始化非关键服务
@@ -74,8 +79,13 @@ class SeleneApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (context) => ThemeService(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (context) => ThemeService()),
+        // USB 采集卡服务（Android 平台）
+        if (Platform.isAndroid)
+          ChangeNotifierProvider.value(value: UsbCaptureService.instance),
+      ],
       // 使用 Selector 只监听 themeMode 变化
       child: Selector<ThemeService, ThemeMode>(
         selector: (_, themeService) => themeService.themeMode,

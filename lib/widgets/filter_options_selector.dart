@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import 'package:selene/utils/device_utils.dart';
 import 'package:selene/widgets/filter_pill_hover.dart';
 

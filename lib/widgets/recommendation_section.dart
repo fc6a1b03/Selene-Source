@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-
 import 'package:selene/models/video_info.dart';
 import 'package:selene/services/theme_service.dart';
 import 'package:selene/utils/device_utils.dart';

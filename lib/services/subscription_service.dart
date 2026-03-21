@@ -1,7 +1,6 @@
 import 'dart:convert';
 
 import 'package:bs58check/bs58check.dart' as bs58;
-
 import 'package:selene/models/live_source.dart';
 import 'package:selene/models/search_resource.dart';
 

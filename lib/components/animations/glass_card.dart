@@ -59,16 +59,16 @@ class GlassCard extends StatelessWidget {
       ),
     );
 
-    if (onTap != null) {
-      card = GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
+    if (enableHover && onTap != null) {
+      card = HoverAnimation(
         child: card,
       );
     }
 
-    if (enableHover && onTap != null) {
-      card = HoverAnimation(
+    if (onTap != null) {
+      card = GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
         child: card,
       );
     }

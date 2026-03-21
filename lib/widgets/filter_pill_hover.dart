@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import 'package:selene/utils/font_utils.dart';
 
 class SelectorOption {

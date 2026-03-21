@@ -3,7 +3,6 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-
 import 'package:selene/models/douban_movie.dart';
 import 'package:selene/services/api_service.dart';
 import 'package:selene/services/douban_cache_service.dart';

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import 'package:selene/design/design_system.dart';
 
 /// 现代化徽章组件

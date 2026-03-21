@@ -20,6 +20,7 @@ class VideoPlayerWidget extends StatefulWidget {
   final VoidCallback? onBackPressed;
   final void Function(VideoPlayerWidgetController)? onControllerCreated;
   final VoidCallback? onReady;
+  final void Function(String error)? onError;
   final VoidCallback? onNextEpisode;
   final VoidCallback? onVideoCompleted;
   final VoidCallback? onPause;
@@ -46,6 +47,7 @@ class VideoPlayerWidget extends StatefulWidget {
     this.onBackPressed,
     this.onControllerCreated,
     this.onReady,
+    this.onError,
     this.onNextEpisode,
     this.onVideoCompleted,
     this.onPause,
@@ -276,6 +278,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     } catch (e) {
       debugPrint('VideoPlayerWidget: 初始化播放器失败: $e');
       _setLoadingState(false);
+      widget.onError?.call(e.toString());
     }
   }
 
@@ -306,6 +309,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     } catch (error) {
       debugPrint('VideoPlayerWidget: failed to open media $error');
       _setLoadingState(false);
+      widget.onError?.call(error.toString());
     }
   }
 

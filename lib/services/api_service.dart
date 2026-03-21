@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-
 import 'package:selene/models/epg_program.dart';
 import 'package:selene/models/favorite_item.dart';
 import 'package:selene/models/live_channel.dart';

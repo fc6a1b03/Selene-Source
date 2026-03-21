@@ -4,7 +4,6 @@ import 'package:dlna_dart/dlna.dart';
 import 'package:dlna_dart/xmlParser.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-
 import 'package:selene/widgets/dlna_player_controls.dart';
 
 /// DLNAPlayer 的控制器，用于外部控制播放器

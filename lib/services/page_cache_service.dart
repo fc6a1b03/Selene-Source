@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import 'package:selene/models/douban_movie.dart';
 import 'package:selene/models/favorite_item.dart';
 import 'package:selene/models/play_record.dart';

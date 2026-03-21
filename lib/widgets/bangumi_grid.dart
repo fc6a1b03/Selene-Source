@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-
 import 'package:selene/models/bangumi.dart';
 import 'package:selene/models/video_info.dart';
 import 'package:selene/utils/device_utils.dart';

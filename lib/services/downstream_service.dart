@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:gbk_codec/gbk_codec.dart';
 import 'package:http/http.dart' as http;
-
 import 'package:selene/models/search_resource.dart';
 import 'package:selene/models/search_result.dart';
 import 'package:selene/services/content_filter_service.dart';

@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:pip/pip.dart';
-
 import 'package:selene/components/animations/video_loading_animation.dart';
 import 'package:selene/models/video_download_info.dart';
 import 'package:selene/services/high_performance_download_service.dart';

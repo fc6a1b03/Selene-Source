@@ -6,11 +6,14 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:selene/components/animations/glass_card.dart';
 import 'package:selene/design/design_system.dart';
+import 'package:selene/screens/usb_capture_screen.dart';
 import 'package:selene/services/api_service.dart';
 import 'package:selene/services/search_service.dart';
 import 'package:selene/services/theme_service.dart';
+import 'package:selene/services/usb_capture_service.dart';
 import 'package:selene/services/user_data_service.dart';
 import 'package:selene/utils/device_utils.dart';
+import 'package:selene/widgets/usb_capture_notification.dart';
 import 'package:selene/widgets/user_menu.dart';
 import 'package:selene/widgets/windows_title_bar.dart';
 
@@ -235,8 +238,10 @@ class _MainLayoutState extends State<MainLayout> {
                           children: [
                             // Header（Windows 下延伸到顶部）
                             _buildHeader(context, themeService),
-                            // 主内容
-                            Expanded(child: widget.content),
+                            // 主内容（包含 USB 采集卡提示）
+                            Expanded(
+                              child: _buildContentWithUsbNotification(),
+                            ),
                           ],
                         ),
                       ),
@@ -263,9 +268,61 @@ class _MainLayoutState extends State<MainLayout> {
                       isDarkMode: isDark,
                       onClose: () => setState(() => _showUserMenu = false),
                     ),
+                  // USB 采集卡浮动按钮（Android 平台，右下角，不挡底部导航）
+                  if (Platform.isAndroid)
+                    Positioned(
+                      right: 16,
+                      bottom: MediaQuery.of(context).padding.bottom +
+                          (widget.showBottomNav ? 100 : 16),
+                      child: _buildUsbCaptureFab(context),
+                    ),
                 ],
               ),
             ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 打开 USB 采集卡播放页面
+  void _openUsbCaptureScreen(BuildContext context) {
+    debugPrint('MainLayout: 打开 USB 采集卡页面');
+
+    // 使用 root Navigator 确保正确导航
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute<void>(
+        builder: (context) => const UsbCaptureScreen(),
+        fullscreenDialog: true, // 全屏对话框模式
+      ),
+    );
+  }
+
+  /// 构建 USB 采集卡浮动按钮
+  Widget _buildUsbCaptureFab(BuildContext context) {
+    return Consumer<UsbCaptureService>(
+      builder: (context, service, _) {
+        final isConnected = service.isCaptureCardConnected;
+
+        // 使用 AnimatedScale 实现平滑的显示/隐藏动画
+        return AnimatedScale(
+          scale: isConnected ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 200),
+          child: AnimatedOpacity(
+            opacity: isConnected ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
+            child: isConnected
+                ? FloatingActionButton(
+                    heroTag: 'usbCaptureFab',
+                    onPressed: () {
+                      debugPrint('MainLayout: 浮动按钮被点击');
+                      _openUsbCaptureScreen(context);
+                    },
+                    backgroundColor: AppColors.primary,
+                    child: const Icon(LucideIcons.monitor,
+                        color: Colors.white, size: 24),
+                  )
+                : const SizedBox.shrink(),
           ),
         );
       },
@@ -719,6 +776,33 @@ class _MainLayoutState extends State<MainLayout> {
           ];
         }).toList(),
       ),
+    );
+  }
+
+  /// 构建带 USB 采集卡提示的内容区域
+  Widget _buildContentWithUsbNotification() {
+    // 只在 Android 平台显示 USB 采集卡提示
+    if (!Platform.isAndroid) {
+      return widget.content;
+    }
+
+    return Consumer<UsbCaptureService>(
+      builder: (context, service, _) {
+        return Column(
+          children: [
+            // 当检测到采集卡时显示提示
+            if (service.isCaptureCardConnected)
+              UsbCaptureNotification(
+                onTap: () {
+                  debugPrint('MainLayout: 提示条被点击');
+                  _openUsbCaptureScreen(context);
+                },
+              ),
+            // 主内容
+            Expanded(child: widget.content),
+          ],
+        );
+      },
     );
   }
 }

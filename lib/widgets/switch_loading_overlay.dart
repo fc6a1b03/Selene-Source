@@ -1,7 +1,6 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-
 import 'package:selene/components/animations/video_loading_animation.dart';
 import 'package:selene/utils/device_utils.dart';
 
