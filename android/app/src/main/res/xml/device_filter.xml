@@ -1,46 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  USB 视频采集卡设备过滤器
-  用于自动检测常见的 USB 视频采集卡设备
-  支持手机通过 USB 采集卡查看无显示器的服务器画面
--->
 <resources>
-    <!--
-      MacroSilicon MS2109/MS2130 - 最常见的 HDMI 转 USB 采集卡芯片
-      广泛应用于各类廉价 HDMI 采集卡
-    -->
-    <usb-device vendor-id="21341" product-id="8457" />  <!-- 0x534d:0x2109 -->
-    <usb-device vendor-id="21341" product-id="8496" />  <!-- 0x534d:0x2130 -->
-
-    <!--
-      Empia EM28xx 系列 - 常见视频采集芯片
-      用于 TV tuner 和视频采集设备
-    -->
-    <usb-device vendor-id="60138" product-id="10336" /> <!-- 0xeb1a:0x2860 -->
-    <usb-device vendor-id="60138" product-id="10352" /> <!-- 0xeb1a:0x2870 -->
-    <usb-device vendor-id="60138" product-id="10272" /> <!-- 0xeb1a:0x2820 -->
-
-    <!--
-      Syntek - 常见视频采集芯片
-    -->
-    <usb-device vendor-id="1505" product-id="1032" />   <!-- 0x05e1:0x0408 -->
-
-    <!--
-      Fushicai - 常见视频采集芯片
-    -->
-    <usb-device vendor-id="7025" product-id="12290" />  <!-- 0x1b71:0x3002 -->
-    <usb-device vendor-id="7025" product-id="12291" />  <!-- 0x1b71:0x3003 -->
-
-    <!--
-      Logitech 摄像头 - 常见 UVC 设备
-    -->
-    <usb-device vendor-id="1133" product-id="0" />      <!-- 0x046d: 所有产品 -->
-
-    <!--
-      通用 UVC (USB Video Class) 设备
-      类别 239 (0xEF) = Miscellaneous Device
-      子类别 2 = Common Class
-      协议 1 = Interface Association Descriptor
-    -->
+    <!-- USB Video Class (UVC) 设备过滤器 -->
+    <!-- 允许所有 UVC 摄像头设备 -->
+    <!-- MS2109 (Hagibis THC01 等采集卡) -->
+    <usb-device vendor-id="0x534d" product-id="0x2109" />
+    <!-- MS2130 (新款采集卡) -->
+    <usb-device vendor-id="0x534d" product-id="0x2130" />
+    <!-- 通配符配置 - 允许所有视频类设备 -->
     <usb-device class="239" subclass="2" protocol="1" />
+    <!-- 常用 UVC 摄像头 Vendor ID -->
+    <!-- Logitech -->
+    <usb-device vendor-id="0x046d" />
+    <!-- Microsoft -->
+    <usb-device vendor-id="0x045e" />
+    <!-- Creative -->
+    <usb-device vendor-id="0x041e" />
+    <!-- HP -->
+    <usb-device vendor-id="0x03f0" />
+    <!-- Lenovo -->
+    <usb-device vendor-id="0x17ef" />
 </resources>

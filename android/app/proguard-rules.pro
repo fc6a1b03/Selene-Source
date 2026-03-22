@@ -41,6 +41,20 @@
 -keep class com.ryanheise.** { *; }
 -keep class me.schlaubi.** { *; }
 
+# === flutter_uvc_camera / AndroidUSBCamera ===
+-keep class com.jiangdg.uvc.UVCCamera {
+    native <methods>;
+    long mNativePtr;
+}
+-keep class com.jiangdg.uvc.IStatusCallback {
+    *;
+}
+-keep interface com.jiangdg.uvc.IButtonCallback {
+    *;
+}
+-keep class com.jiangdg.ausbc.** { *; }
+-keep class com.jiangdg.usb.** { *; }
+
 # === 避免反射问题 ===
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;

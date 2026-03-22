@@ -63,6 +63,19 @@ class UsbCaptureService extends ChangeNotifier {
   Future<void> _checkCurrentStatus() async {
     try {
       debugPrint('UsbCaptureService: 检查当前 USB 设备状态...');
+
+      // 先获取所有 USB 设备用于调试
+      final allDevices = await UsbCaptureChannel.getAllUsbDevices();
+      debugPrint('UsbCaptureService: 系统中的 USB 设备数量: ${allDevices.length}');
+      for (final device in allDevices) {
+        final vid = device['vid'] as int;
+        final pid = device['pid'] as int;
+        final name = device['productName'] as String?;
+        final isCapture = device['isCaptureCard'] as bool;
+        debugPrint(
+            'UsbCaptureService: 设备: $name, VID: 0x${vid.toRadixString(16)}, PID: 0x${pid.toRadixString(16)}, 是采集卡: $isCapture');
+      }
+
       final isConnected = await UsbCaptureChannel.isCaptureCardConnected();
       debugPrint('UsbCaptureService: 原生层返回连接状态: $isConnected');
 

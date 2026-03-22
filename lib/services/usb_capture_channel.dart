@@ -119,6 +119,33 @@ class UsbCaptureChannel {
       return [];
     }
   }
+
+  /// 请求 USB 权限
+  ///
+  /// 返回 true 表示已有权限，false 表示权限请求已发送
+  static Future<bool> requestUsbPermission({int? deviceId}) async {
+    try {
+      final result = await _channel.invokeMethod<bool>(
+        'requestUsbPermission',
+        {'deviceId': deviceId},
+      );
+      return result ?? false;
+    } catch (e) {
+      debugPrint('UsbCaptureChannel: 请求 USB 权限失败: $e');
+      return false;
+    }
+  }
+
+  /// 检查是否有 USB 权限
+  static Future<bool> hasUsbPermission() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('hasUsbPermission');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('UsbCaptureChannel: 检查 USB 权限失败: $e');
+      return false;
+    }
+  }
 }
 
 /// USB 采集卡事件

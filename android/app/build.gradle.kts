@@ -18,7 +18,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    // 强制所有子项目使用 Java 17，消除插件的 Java 8 警告
     subprojects {
         afterEvaluate {
             if (hasProperty("android")) {
@@ -48,19 +47,6 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
-
-    // ABI 拆分配置：与 Flutter --split-per-abi 兼容
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            // 包含的架构：arm64-v8a 是主流，armeabi-v7a 兼容老旧设备，x86_64 用于模拟器
-            include("arm64-v8a", "armeabi-v7a", "x86_64")
-            // 不生成通用 APK，减少构建时间
-            isUniversalApk = false
-        }
-    }
-
     val keystorePropertiesFile = rootProject.file("key.properties")
     val hasSigningConfig = keystorePropertiesFile.exists()
 

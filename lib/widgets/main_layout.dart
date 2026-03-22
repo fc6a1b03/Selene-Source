@@ -6,7 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:selene/components/animations/glass_card.dart';
 import 'package:selene/design/design_system.dart';
-import 'package:selene/screens/usb_capture_screen.dart';
+import 'package:selene/screens/uvc_camera_screen.dart';
 import 'package:selene/services/api_service.dart';
 import 'package:selene/services/search_service.dart';
 import 'package:selene/services/theme_service.dart';
@@ -285,14 +285,14 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
-  /// 打开 USB 采集卡播放页面
+  /// 打开 USB 摄像头预览页面
   void _openUsbCaptureScreen(BuildContext context) {
-    debugPrint('MainLayout: 打开 USB 采集卡页面');
+    debugPrint('MainLayout: 打开 USB 摄像头页面');
 
     // 使用 root Navigator 确保正确导航
     Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute<void>(
-        builder: (context) => const UsbCaptureScreen(),
+        builder: (context) => const UVCCameraScreen(),
         fullscreenDialog: true, // 全屏对话框模式
       ),
     );

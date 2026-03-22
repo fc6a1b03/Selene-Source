@@ -227,24 +227,46 @@ class _UserMenuState extends State<UserMenu> {
   /// 处理检测 USB 设备
   Future<void> _handleDetectUsbDevices() async {
     try {
+      // 先显示加载提示
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '正在检测 USB 设备...',
+              style: FontUtils.poppins(color: Colors.white),
+            ),
+            backgroundColor: const Color(0xFF3b82f6),
+            duration: const Duration(seconds: 1),
+          ),
+        );
+      }
+
       final devices = await UsbCaptureChannel.getAllUsbDevices();
 
+      if (!mounted) return;
+
       if (devices.isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                '未检测到 USB 设备',
-                style: FontUtils.poppins(color: Colors.white),
-              ),
-              backgroundColor: const Color(0xFFf59e0b),
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '未检测到 USB 设备',
+              style: FontUtils.poppins(color: Colors.white),
             ),
-          );
-        }
+            backgroundColor: const Color(0xFFf59e0b),
+          ),
+        );
         return;
       }
 
-      if (mounted) {
+      // 检查是否有采集卡设备
+      final captureCards =
+          devices.where((d) => d['isCaptureCard'] == true).toList();
+
+      if (captureCards.isNotEmpty) {
+        // 有关闭菜单
+        widget.onClose?.call();
+
+        // 先显示设备信息对话框（带打开按钮）
         await showDialog<void>(
           context: context,
           builder: (context) => UsbDeviceInfoDialog(
@@ -252,7 +274,17 @@ class _UserMenuState extends State<UserMenu> {
             isDarkMode: widget.isDarkMode,
           ),
         );
+        return;
       }
+
+      // 没有采集卡，显示设备信息对话框
+      await showDialog<void>(
+        context: context,
+        builder: (context) => UsbDeviceInfoDialog(
+          devices: devices,
+          isDarkMode: widget.isDarkMode,
+        ),
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

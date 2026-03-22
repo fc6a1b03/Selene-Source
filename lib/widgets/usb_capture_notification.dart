@@ -24,7 +24,7 @@ class UsbCaptureNotification extends StatelessWidget {
         color: isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(12),
         elevation: 4,
-        shadowColor: Colors.black.withOpacity(0.2),
+        shadowColor: Colors.black.withValues(alpha: 0.2),
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(12),
@@ -33,8 +33,7 @@ class UsbCaptureNotification extends StatelessWidget {
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
-                color: AppColors.primary.withOpacity(0.3),
-                width: 1,
+                color: AppColors.primary.withValues(alpha: 0.3),
               ),
             ),
             child: Row(

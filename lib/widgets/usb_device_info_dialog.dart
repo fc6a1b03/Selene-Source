@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:selene/design/design_system.dart';
+import 'package:selene/screens/uvc_camera_screen.dart';
 import 'package:selene/utils/font_utils.dart';
 
 /// USB 设备信息对话框
@@ -354,6 +355,9 @@ class UsbDeviceInfoDialog extends StatelessWidget {
   }
 
   Widget _buildFooter(BuildContext context) {
+    // 检查是否有采集卡
+    final hasCaptureCard = devices.any((d) => d['isCaptureCard'] == true);
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -363,44 +367,87 @@ class UsbDeviceInfoDialog extends StatelessWidget {
           bottomRight: Radius.circular(20),
         ),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          // 复制按钮
-          TextButton.icon(
-            onPressed: () => _copyDeviceInfo(context),
-            icon: Icon(
-              LucideIcons.copy,
-              size: 16,
-              color: AppColors.primary,
-            ),
-            label: Text(
-              '复制信息',
-              style: FontUtils.poppins(
-                fontSize: 13,
-                color: AppColors.primary,
-                fontWeight: FontWeight.w500,
+          // 如果有采集卡，显示打开预览按钮
+          if (hasCaptureCard) ...[
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  Navigator.of(context, rootNavigator: true).push(
+                    MaterialPageRoute<void>(
+                      builder: (context) => const UVCCameraScreen(),
+                      fullscreenDialog: true,
+                    ),
+                  );
+                },
+                icon: const Icon(LucideIcons.monitor, size: 18),
+                label: Text(
+                  '打开 USB 预览',
+                  style: FontUtils.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
               ),
             ),
-          ),
-          // 关闭按钮
-          ElevatedButton(
-            onPressed: () => Navigator.of(context).pop(),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
+            const SizedBox(height: 12),
+          ],
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // 复制按钮
+              TextButton.icon(
+                onPressed: () => _copyDeviceInfo(context),
+                icon: Icon(
+                  LucideIcons.copy,
+                  size: 16,
+                  color: AppColors.primary,
+                ),
+                label: Text(
+                  '复制信息',
+                  style: FontUtils.poppins(
+                    fontSize: 13,
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
               ),
-            ),
-            child: Text(
-              '关闭',
-              style: FontUtils.poppins(
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+              // 关闭按钮
+              ElevatedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isDarkMode
+                      ? const Color(0xFF374151)
+                      : const Color(0xFFE5E7EB),
+                  foregroundColor:
+                      isDarkMode ? Colors.white : const Color(0xFF374151),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
+                child: Text(
+                  '关闭',
+                  style: FontUtils.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
         ],
       ),
