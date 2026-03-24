@@ -1,3 +1,8 @@
+---
+name: flutter-performance-2026
+description: Selene 项目 Flutter 性能优化技能文档（2026）
+---
+
 # Flutter 高性能开发规范 (2026版)
 
 > **适用范围**: Selene 视频播放器项目  
