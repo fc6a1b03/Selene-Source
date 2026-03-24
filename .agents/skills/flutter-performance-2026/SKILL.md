@@ -3,6 +3,8 @@ name: flutter-performance-2026
 description: Selene 项目 Flutter 性能优化技能文档（2026）
 ---
 
+> **编码要求（强制）**: 项目中**所有文件**必须使用 **UTF-8（无 BOM）** 保存，禁止使用 ANSI/GBK/UTF-8 with BOM，避免中文乱码。
+
 # Flutter 高性能开发规范 (2026版)
 
 > **适用范围**: Selene 视频播放器项目  
