@@ -1,5 +1,4 @@
-import 'dart:convert';
-import 'dart:io';
+﻿import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -9,13 +8,11 @@ import 'package:selene/services/douban_cache_service.dart';
 import 'package:selene/services/live_service.dart';
 import 'package:selene/services/local_search_cache_service.dart';
 import 'package:selene/services/page_cache_service.dart';
-import 'package:selene/services/usb_capture_channel.dart';
 import 'package:selene/services/user_data_service.dart';
 import 'package:selene/services/version_service.dart';
 import 'package:selene/utils/device_utils.dart';
 import 'package:selene/utils/font_utils.dart';
 import 'package:selene/widgets/update_dialog.dart';
-import 'package:selene/widgets/usb_device_info_dialog.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class UserMenu extends StatefulWidget {
@@ -215,82 +212,6 @@ class _UserMenuState extends State<UserMenu> {
           SnackBar(
             content: Text(
               '检查更新失败: ${e.toString()}',
-              style: FontUtils.poppins(color: Colors.white),
-            ),
-            backgroundColor: const Color(0xFFef4444),
-          ),
-        );
-      }
-    }
-  }
-
-  /// 处理检测 USB 设备
-  Future<void> _handleDetectUsbDevices() async {
-    try {
-      // 先显示加载提示
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '正在检测 USB 设备...',
-              style: FontUtils.poppins(color: Colors.white),
-            ),
-            backgroundColor: const Color(0xFF3b82f6),
-            duration: const Duration(seconds: 1),
-          ),
-        );
-      }
-
-      final devices = await UsbCaptureChannel.getAllUsbDevices();
-
-      if (!mounted) return;
-
-      if (devices.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '未检测到 USB 设备',
-              style: FontUtils.poppins(color: Colors.white),
-            ),
-            backgroundColor: const Color(0xFFf59e0b),
-          ),
-        );
-        return;
-      }
-
-      // 检查是否有采集卡设备
-      final captureCards =
-          devices.where((d) => d['isCaptureCard'] == true).toList();
-
-      if (captureCards.isNotEmpty) {
-        // 有关闭菜单
-        widget.onClose?.call();
-
-        // 先显示设备信息对话框（带打开按钮）
-        await showDialog<void>(
-          context: context,
-          builder: (context) => UsbDeviceInfoDialog(
-            devices: devices,
-            isDarkMode: widget.isDarkMode,
-          ),
-        );
-        return;
-      }
-
-      // 没有采集卡，显示设备信息对话框
-      await showDialog<void>(
-        context: context,
-        builder: (context) => UsbDeviceInfoDialog(
-          devices: devices,
-          isDarkMode: widget.isDarkMode,
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '检测失败: ${e.toString()}',
               style: FontUtils.poppins(color: Colors.white),
             ),
             backgroundColor: const Color(0xFFef4444),
@@ -964,50 +885,7 @@ class _UserMenuState extends State<UserMenu> {
                           ? const Color(0xFF374151)
                           : const Color(0xFFe5e7eb),
                     ),
-                    // USB 设备检测按钮（仅 Android）
-                    if (Platform.isAndroid)
-                      Material(
-                        color: Colors.transparent,
-                        child: InkWell(
-                          onTap: _handleDetectUsbDevices,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 10,
-                            ),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  LucideIcons.usb,
-                                  size: 20,
-                                  color: widget.isDarkMode
-                                      ? const Color(0xFF9ca3af)
-                                      : const Color(0xFF6b7280),
-                                ),
-                                const SizedBox(width: 12),
-                                Text(
-                                  '检测 USB 设备',
-                                  style: FontUtils.poppins(
-                                    fontSize: 16,
-                                    color: widget.isDarkMode
-                                        ? const Color(0xFFffffff)
-                                        : const Color(0xFF1f2937),
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (Platform.isAndroid)
-                      Container(
-                        height: 1,
-                        color: widget.isDarkMode
-                            ? const Color(0xFF374151)
-                            : const Color(0xFFe5e7eb),
-                      ),
-                    // 检查更新按钮
+                    // Check update button
                     Material(
                       color: Colors.transparent,
                       child: InkWell(

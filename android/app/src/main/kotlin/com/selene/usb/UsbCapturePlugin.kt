@@ -1,4 +1,4 @@
-package com.selene.usb
+﻿package com.selene.usb
 
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -62,6 +62,16 @@ class UsbCapturePlugin(
         checkExistingDevices()
     }
 
+    private fun safeString(reader: () -> String?): String? {
+        return try {
+            reader()
+        } catch (_: SecurityException) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /**
      * 检查已连接的 USB 设备
      */
@@ -74,15 +84,14 @@ class UsbCapturePlugin(
             val pid = device.productId
             android.util.Log.d(
                 "UsbCapturePlugin",
-                "设备: $name, VID: 0x${vid.toString(16)}, PID: 0x${pid.toString(16)}, 名称: ${device.productName}"
+                "设备: $name, VID: 0x${vid.toString(16)}, PID: 0x${pid.toString(16)}, 名称: ${safeString { device.productName }}"
             )
 
-            // 检测：VID/PID 匹配 或 UVC 设备 或 产品名关键词
             if (isKnownCaptureCard(vid, pid) || isUvcDevice(device) || isCaptureCardByName(device)) {
                 connectedDevice = device
                 android.util.Log.d(
                     "UsbCapturePlugin",
-                    "✓ 发现采集卡: ${device.productName} (0x${vid.toString(16)}:0x${pid.toString(16)})"
+                    "发现采集卡: ${safeString { device.productName }} (0x${vid.toString(16)}:0x${pid.toString(16)})"
                 )
                 break
             }
@@ -109,7 +118,7 @@ class UsbCapturePlugin(
      * 通过产品名称检查是否是采集卡
      */
     private fun isCaptureCardByName(device: UsbDevice): Boolean {
-        val productName = device.productName?.lowercase() ?: ""
+        val productName = safeString { device.productName }?.lowercase() ?: ""
         val keywords = listOf("capture", "video", "camera", "hdmi", "采集卡", "摄像头", "webcam", "uvc")
         return keywords.any { productName.contains(it) }
     }
@@ -159,12 +168,10 @@ class UsbCapturePlugin(
      * 检查是否是 UVC (USB Video Class) 设备
      */
     private fun isUvcDevice(device: UsbDevice): Boolean {
-        // 遍历所有接口检查是否是视频类
         for (i in 0 until device.interfaceCount) {
             val usbInterface = device.getInterface(i)
-            // USB Video Class = 14 (0x0E)
             if (usbInterface.interfaceClass == 14) {
-                android.util.Log.d("UsbCapturePlugin", "  ✓ 发现 UVC 接口 (class=14)")
+                android.util.Log.d("UsbCapturePlugin", "发现 UVC 接口 (class=14)")
                 return true
             }
         }
@@ -177,54 +184,60 @@ class UsbCapturePlugin(
     private fun registerUsbReceiver() {
         usbReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                when (intent.action) {
-                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                try {
+                    when (intent.action) {
+                        UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                            }
+                            device?.let { handleDeviceAttached(it) }
                         }
-                        device?.let { handleDeviceAttached(it) }
-                    }
 
-                    UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                        UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                            }
+                            device?.let { handleDeviceDetached(it) }
                         }
-                        device?.let { handleDeviceDetached(it) }
-                    }
 
-                    ACTION_USB_PERMISSION -> {
-                        val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                        } else {
-                            @Suppress("DEPRECATION")
-                            intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                        }
-                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
-                        android.util.Log.d("UsbCapturePlugin", "USB 权限结果: $granted, 设备: ${device?.productName}")
+                        ACTION_USB_PERMISSION -> {
+                            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                            }
+                            val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                            android.util.Log.d("UsbCapturePlugin", "USB 权限结果: $granted, 设备: ${device?.let { safeString { it.productName } }}")
 
-                        if (granted && device != null && isCaptureCard(device)) {
-                            connectedDevice = device
-                            eventSink?.success(
-                                mapOf(
-                                    "type" to "permissionGranted",
-                                    "device" to deviceToMap(device)
+                            if (granted && device != null && isCaptureCard(device)) {
+                                connectedDevice = device
+                                eventSink?.success(
+                                    mapOf(
+                                        "type" to "permissionGranted",
+                                        "device" to deviceToMap(device)
+                                    )
                                 )
-                            )
-                        } else if (!granted && device != null) {
-                            eventSink?.success(
-                                mapOf(
-                                    "type" to "permissionDenied",
-                                    "device" to deviceToMap(device)
+                            } else if (!granted && device != null) {
+                                eventSink?.success(
+                                    mapOf(
+                                        "type" to "permissionDenied",
+                                        "device" to deviceToMap(device)
+                                    )
                                 )
-                            )
+                            }
                         }
+
+                        else -> Unit
                     }
+                } catch (e: Exception) {
+                    android.util.Log.e("UsbCapturePlugin", "处理 USB 广播失败: ${e.message}", e)
                 }
             }
         }
@@ -236,7 +249,7 @@ class UsbCapturePlugin(
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(usbReceiver, filter, Context.RECEIVER_EXPORTED)
+            context.registerReceiver(usbReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             context.registerReceiver(usbReceiver, filter)
         }
@@ -249,16 +262,14 @@ class UsbCapturePlugin(
         val vid = device.vendorId
         val pid = device.productId
 
-        // 检测：VID/PID 匹配 或 UVC 设备 或 产品名关键词
         if (isKnownCaptureCard(vid, pid) || isUvcDevice(device) || isCaptureCardByName(device)) {
             connectedDevice = device
 
-            // 检查是否有权限，如果没有则请求
             if (!usbManager.hasPermission(device)) {
                 requestUsbPermission(device)
             }
 
-            android.util.Log.d("UsbCapturePlugin", "发送 attached 事件到 Flutter: ${device.productName}")
+            android.util.Log.d("UsbCapturePlugin", "发送 attached 事件到 Flutter: ${safeString { device.productName }}")
             eventSink?.success(
                 mapOf(
                     "type" to "attached",
@@ -275,18 +286,16 @@ class UsbCapturePlugin(
         try {
             android.util.Log.d(
                 "UsbCapturePlugin",
-                "正在请求 USB 权限，设备: ${device.productName}, deviceId: ${device.deviceId}"
+                "正在请求 USB 权限，设备: ${safeString { device.productName }}, deviceId: ${device.deviceId}"
             )
 
-            // 创建显式 Intent 确保广播能正确接收
             val intent = Intent(ACTION_USB_PERMISSION).apply {
                 setPackage(context.packageName)
-                // 添加设备信息到 Intent 以便在接收器中识别
                 putExtra(UsbManager.EXTRA_DEVICE, device)
             }
 
             val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
             } else {
@@ -295,12 +304,11 @@ class UsbCapturePlugin(
 
             val permissionIntent = android.app.PendingIntent.getBroadcast(
                 context,
-                device.deviceId, // 使用 deviceId 作为 requestCode 区分不同设备
+                device.deviceId,
                 intent,
                 flags
             )
 
-            android.util.Log.d("UsbCapturePlugin", "发送权限请求...")
             usbManager.requestPermission(device, permissionIntent)
             android.util.Log.d("UsbCapturePlugin", "权限请求已发送")
         } catch (e: Exception) {
@@ -329,47 +337,36 @@ class UsbCapturePlugin(
     private fun isCaptureCard(device: UsbDevice): Boolean {
         val vid = device.vendorId
         val pid = device.productId
-        val productName = device.productName ?: "Unknown"
+        val productName = safeString { device.productName } ?: "Unknown"
 
-        android.util.Log.d(
-            "UsbCapturePlugin",
-            "检查设备: $productName (VID: 0x${vid.toString(16)}, PID: 0x${pid.toString(16)})"
-        )
-
-        // 检查 VID/PID
         val knownPids = CAPTURE_CARD_SIGNATURES[vid]
         if (knownPids != null) {
             if (knownPids.isEmpty() || knownPids.contains(pid)) {
-                android.util.Log.d("UsbCapturePlugin", "✓ VID/PID 匹配: 0x${vid.toString(16)}:0x${pid.toString(16)}")
                 return true
             }
         }
 
-        // 检查产品名称关键词
         val productNameLower = productName.lowercase()
-        val captureKeywords = listOf(
-            "capture", "video", "camera", "hdmi", "采集卡", "摄像头", "webcam", "uvc"
-        )
-        for (keyword in captureKeywords) {
-            if (productNameLower.contains(keyword)) {
-                android.util.Log.d("UsbCapturePlugin", "✓ 产品名称匹配关键词 '$keyword': $productName")
-                return true
-            }
-        }
-
-        return false
+        val captureKeywords = listOf("capture", "video", "camera", "hdmi", "采集卡", "摄像头", "webcam", "uvc")
+        return captureKeywords.any { productNameLower.contains(it) }
     }
 
     /**
      * 将 UsbDevice 转换为 Map
      */
     private fun deviceToMap(device: UsbDevice): Map<String, Any?> {
+        val hasPermission = try {
+            usbManager.hasPermission(device)
+        } catch (_: Exception) {
+            false
+        }
+
         return mapOf(
             "vid" to device.vendorId,
             "pid" to device.productId,
-            "productName" to device.productName,
-            "manufacturerName" to device.manufacturerName,
-            "serialNumber" to device.serialNumber
+            "productName" to safeString { device.productName },
+            "manufacturerName" to safeString { device.manufacturerName },
+            "serialNumber" to if (hasPermission) safeString { device.serialNumber } else null
         )
     }
 
@@ -388,15 +385,11 @@ class UsbCapturePlugin(
             }
 
             "getVideoDevicePath" -> {
-                // 假设第一个 UVC 设备对应 video0
-                // 实际项目中可以通过其他方式确定
                 result.success("/dev/video0")
             }
 
             "getAllUsbDevices" -> {
-                // 返回所有 USB 设备信息（用于调试）
                 val devices = usbManager.deviceList.map { (_, device) ->
-                    // 检查接口类别
                     var hasVideoInterface = false
                     var hasAudioInterface = false
                     val interfaceClasses = mutableListOf<Int>()
@@ -405,18 +398,17 @@ class UsbCapturePlugin(
                         val usbInterface = device.getInterface(i)
                         val cls = usbInterface.interfaceClass
                         interfaceClasses.add(cls)
-                        if (cls == 14) hasVideoInterface = true  // Video
-                        if (cls == 1) hasAudioInterface = true   // Audio
+                        if (cls == 14) hasVideoInterface = true
+                        if (cls == 1) hasAudioInterface = true
                     }
 
-                    // 识别芯片型号
                     val chipName = identifyChip(device.vendorId, device.productId)
 
                     mapOf(
                         "vid" to device.vendorId,
                         "pid" to device.productId,
-                        "productName" to device.productName,
-                        "manufacturerName" to device.manufacturerName,
+                        "productName" to safeString { device.productName },
+                        "manufacturerName" to safeString { device.manufacturerName },
                         "deviceId" to device.deviceId,
                         "deviceClass" to device.deviceClass,
                         "deviceSubclass" to device.deviceSubclass,
@@ -437,7 +429,6 @@ class UsbCapturePlugin(
             }
 
             "requestUsbPermission" -> {
-                // 请求 USB 权限
                 val deviceId = call.argument<Int>("deviceId")
                 if (deviceId != null) {
                     val device = usbManager.deviceList.values.find { it.deviceId == deviceId }
@@ -446,13 +437,12 @@ class UsbCapturePlugin(
                             result.success(true)
                         } else {
                             requestUsbPermission(device)
-                            result.success(false) // 权限请求已发送，但尚未获得
+                            result.success(false)
                         }
                     } else {
                         result.error("DEVICE_NOT_FOUND", "找不到指定的 USB 设备", null)
                     }
                 } else {
-                    // 如果没有指定 deviceId，请求第一个采集卡的权限
                     connectedDevice?.let { device ->
                         if (usbManager.hasPermission(device)) {
                             result.success(true)
@@ -465,7 +455,6 @@ class UsbCapturePlugin(
             }
 
             "hasUsbPermission" -> {
-                // 检查是否有 USB 权限
                 connectedDevice?.let { device ->
                     result.success(usbManager.hasPermission(device))
                 } ?: result.success(false)
@@ -481,11 +470,10 @@ class UsbCapturePlugin(
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
         eventSink = events
-        android.util.Log.d("UsbCapturePlugin", "Flutter 开始监听事件, 当前设备: ${connectedDevice?.productName}")
+        android.util.Log.d("UsbCapturePlugin", "Flutter 开始监听事件，当前设备: ${connectedDevice?.let { safeString { it.productName } }}")
 
-        // 发送当前已连接的设备
         connectedDevice?.let { device ->
-            android.util.Log.d("UsbCapturePlugin", "发送已连接设备到 Flutter: ${device.productName}")
+            android.util.Log.d("UsbCapturePlugin", "发送已连接设备到 Flutter: ${safeString { device.productName }}")
             events?.success(
                 mapOf(
                     "type" to "attached",
