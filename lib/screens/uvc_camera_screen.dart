@@ -1,7 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_uvc_camera/flutter_uvc_camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
@@ -9,8 +9,6 @@ import 'package:selene/design/design_system.dart';
 import 'package:selene/services/usb_capture_channel.dart';
 import 'package:selene/services/usb_capture_service.dart';
 
-/// USB 摄像头预览页面
-/// 使用 flutter_uvc_camera 插件进行应用内 UVC 预览
 class UVCCameraScreen extends StatefulWidget {
   const UVCCameraScreen({super.key});
 
@@ -19,22 +17,31 @@ class UVCCameraScreen extends StatefulWidget {
 }
 
 class _UVCCameraScreenState extends State<UVCCameraScreen> {
+  final GlobalKey _previewKey = GlobalKey();
+
   UVCCameraController? _cameraController;
+  StreamSubscription<UsbCaptureEvent>? _usbEventSubscription;
+  Future<String?>? _recordingFuture;
+
   bool _isInitializing = true;
   bool _isOpeningCamera = false;
   bool _isCameraOpen = false;
   bool _isRecording = false;
   bool _isStoppingRecording = false;
-  bool _isFullscreen = false;
-  Future<String?>? _recordingSessionFuture;
+  bool _isOverviewExpanded = false;
+  bool _isClosingPage = false;
+  bool _didApplyPreferredResolution = false;
 
   String? _statusMessage;
   String? _errorMessage;
-
-  List<PreviewSize> _previewSizes = <PreviewSize>[];
-  PreviewSize? _currentResolution;
-
   DateTime _lastStatusUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+  PreviewSize? _activePreviewSize;
+  PreviewSize? _preferredPreviewSize;
+  double _previewScale = 1.0;
+  double _previewScaleStart = 1.0;
+  Offset _previewOffset = Offset.zero;
+  Offset _previewOffsetStart = Offset.zero;
+  Offset _gestureStartFocalPoint = Offset.zero;
 
   @override
   void initState() {
@@ -42,21 +49,62 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     _cameraController = UVCCameraController();
     _setupCallbacks();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _attachUsbDisconnectListener();
       unawaited(_initializeCamera(autoOpen: true));
     });
   }
 
   @override
   void dispose() {
-    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
-    unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
+    _detachUsbDisconnectListener();
+    _releaseCameraResources();
+    super.dispose();
+  }
+
+  void _attachUsbDisconnectListener() {
+    _usbEventSubscription?.cancel();
+    _usbEventSubscription = UsbCaptureChannel.eventStream.listen((
+      UsbCaptureEvent event,
+    ) {
+      if (!mounted || _isClosingPage) {
+        return;
+      }
+      if (event.type == UsbCaptureEventType.detached) {
+        unawaited(_closePage());
+      }
+    });
+  }
+
+  void _detachUsbDisconnectListener() {
+    _usbEventSubscription?.cancel();
+    _usbEventSubscription = null;
+  }
+
+  void _releaseCameraResources() {
     try {
       _cameraController?.closeCamera();
       _cameraController?.dispose();
     } catch (e) {
-      debugPrint('UVCCameraScreen: dispose error: $e');
+      debugPrint('UVCCameraScreen: release error: $e');
+    } finally {
+      _cameraController = null;
+      _recordingFuture = null;
+      _activePreviewSize = null;
+      _preferredPreviewSize = null;
+      _didApplyPreferredResolution = false;
     }
-    super.dispose();
+  }
+
+  Future<void> _closePage() async {
+    if (_isClosingPage) {
+      return;
+    }
+    _isClosingPage = true;
+    _detachUsbDisconnectListener();
+    _releaseCameraResources();
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   Future<void> _initializeCamera({required bool autoOpen}) async {
@@ -66,50 +114,19 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
       _errorMessage = null;
       _statusMessage = '正在初始化 USB 摄像头...';
     });
-
     try {
       final Map<dynamic, dynamic>? card = await _getPrimaryCaptureCard();
-      if (card == null) {
-        setState(() {
-          _errorMessage = '未检测到 USB 采集卡';
-          _statusMessage = '请先连接采集卡';
-        });
-        return;
-      }
-
+      if (card == null) return _setErrorMessage('未检测到 USB 采集卡');
       final bool runtimeReady = await _ensureRuntimePermissions();
-      if (!runtimeReady) {
-        setState(() {
-          _errorMessage = '缺少相机或麦克风权限';
-          _statusMessage = '请在系统设置中授权后重试';
-        });
-        return;
-      }
-
+      if (!runtimeReady) return _setErrorMessage('缺少相机或麦克风权限');
       final bool usbReady = await _ensureUsbPermission(card);
-      if (!usbReady) {
-        setState(() {
-          _errorMessage = '未获得 USB 权限';
-          _statusMessage = '请重新插拔设备并允许访问';
-        });
-        return;
-      }
-
-      _updateStatusMessage('设备就绪，${autoOpen ? '正在自动打开预览...' : '点击下方打开预览'}');
-      if (autoOpen) {
-        await _openCamera();
-      }
+      if (!usbReady) return _setErrorMessage('未获得 USB 权限');
+      _updateStatusMessage(autoOpen ? '设备就绪，正在自动打开预览...' : '设备就绪，请点击打开预览');
+      if (autoOpen) await _openCamera();
     } catch (e) {
-      setState(() {
-        _errorMessage = '初始化失败: $e';
-        _statusMessage = '初始化失败';
-      });
+      _setErrorMessage('初始化失败: $e');
     } finally {
-      if (mounted) {
-        setState(() {
-          _isInitializing = false;
-        });
-      }
+      if (mounted) setState(() => _isInitializing = false);
     }
   }
 
@@ -119,9 +136,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     final List<Map<dynamic, dynamic>> cards = devices
         .where((Map<dynamic, dynamic> d) => d['isCaptureCard'] == true)
         .toList();
-    if (cards.isEmpty) {
-      return null;
-    }
+    if (cards.isEmpty) return null;
     cards.sort((Map<dynamic, dynamic> a, Map<dynamic, dynamic> b) {
       final bool ap = a['hasPermission'] as bool? ?? false;
       final bool bp = b['hasPermission'] as bool? ?? false;
@@ -139,21 +154,16 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   Future<bool> _ensureUsbPermission(Map<dynamic, dynamic> card) async {
     final bool hasPermission = card['hasPermission'] as bool? ?? false;
     if (hasPermission) return true;
-
     _updateStatusMessage('正在请求 USB 权限...');
     await UsbCaptureChannel.requestUsbPermission(
-      deviceId: card['deviceId'] as int?,
-    );
+        deviceId: card['deviceId'] as int?);
     return _waitUsbPermission(
-      deviceId: card['deviceId'] as int?,
-      timeout: const Duration(seconds: 12),
-    );
+        deviceId: card['deviceId'] as int?,
+        timeout: const Duration(seconds: 12));
   }
 
-  Future<bool> _waitUsbPermission({
-    required int? deviceId,
-    required Duration timeout,
-  }) async {
+  Future<bool> _waitUsbPermission(
+      {required int? deviceId, required Duration timeout}) async {
     final DateTime started = DateTime.now();
     while (mounted && DateTime.now().difference(started) < timeout) {
       final List<Map<dynamic, dynamic>> devices =
@@ -164,12 +174,9 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
             (deviceId == null || d['deviceId'] == deviceId),
         orElse: () => <dynamic, dynamic>{},
       );
-      if (target.isNotEmpty) {
-        final bool granted = target['hasPermission'] as bool? ?? false;
-        if (granted) {
-          _updateStatusMessage('USB 权限已获得');
-          return true;
-        }
+      if (target.isNotEmpty && (target['hasPermission'] as bool? ?? false)) {
+        _updateStatusMessage('USB 权限已获得');
+        return true;
       }
       final double elapsed =
           DateTime.now().difference(started).inMilliseconds / 1000;
@@ -186,249 +193,245 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
       _errorMessage = null;
       _statusMessage = '正在打开摄像头...';
     });
-
     try {
       final Map<dynamic, dynamic>? card = await _getPrimaryCaptureCard();
-      if (card == null) {
-        setState(() {
-          _errorMessage = '未检测到 USB 采集卡';
-          _statusMessage = '请先连接采集卡';
-        });
-        return;
-      }
-
+      if (card == null) return _setErrorMessage('未检测到 USB 采集卡');
       final bool usbReady = await _ensureUsbPermission(card);
-      if (!usbReady) {
-        setState(() {
-          _errorMessage = '未获取 USB 权限';
-          _statusMessage = '无法打开摄像头';
-        });
-        return;
-      }
-
-      final Future<void>? openFuture = _cameraController?.openUVCCamera();
-      if (openFuture != null) {
-        unawaited(
-          openFuture.catchError((Object e, StackTrace s) {
-            debugPrint('UVCCameraScreen: openUVCCamera 异步错误: $e');
-          }),
-        );
-      }
-
-      bool opened = await _waitCameraOpened(
-        timeout: const Duration(seconds: 12),
-      );
-
-      // 某些机型回调不稳定：二次检查分辨率列表作为“已打开”兜底信号
-      if (!opened) {
-        final List<PreviewSize> fallbackSizes =
-            await _readPreviewSizesFromController();
-        if (fallbackSizes.isNotEmpty) {
-          opened = true;
-          if (mounted) {
-            setState(() {
-              _isCameraOpen = true;
-              _previewSizes = fallbackSizes;
-            });
-          }
-        }
-      }
-
-      if (!opened) {
-        throw TimeoutException('摄像头未进入 opened 状态');
-      }
-
-      await _loadPreviewSizesAndApplyPreferred();
+      if (!usbReady) return _setErrorMessage('未获得 USB 权限');
+      await _cameraController?.openUVCCamera();
+      final bool ready =
+          await _waitCameraReady(timeout: const Duration(seconds: 15));
+      if (!ready) return _setErrorMessage('摄像头初始化较慢，请稍后重试');
+      await _syncCameraDetails(applyPreferredResolution: true);
+      _resetPreviewTransform();
       _updateStatusMessage('预览已开启');
-    } on TimeoutException {
-      setState(() {
-        _errorMessage = '打开超时，设备可能未完成初始化';
-        _statusMessage = '请点击“打开”重试';
-      });
     } catch (e) {
-      setState(() {
-        _errorMessage = '打开失败: $e';
-        _statusMessage = '打开失败';
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('打开摄像头失败: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      _setErrorMessage(_normalizeOpenError(e));
     } finally {
       if (mounted) {
         setState(() {
           _isOpeningCamera = false;
+          _isInitializing = false;
         });
-      } else {
-        _isOpeningCamera = false;
       }
     }
   }
 
-  Future<bool> _waitCameraOpened({required Duration timeout}) async {
+  Future<bool> _waitCameraReady({required Duration timeout}) async {
     final DateTime started = DateTime.now();
-    while (DateTime.now().difference(started) < timeout) {
+    while (mounted && DateTime.now().difference(started) < timeout) {
       if (_isCameraOpen) return true;
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+      final Map<String, dynamic>? info = await _readCameraRequestInfo();
+      final PreviewSize? size = _extractPreviewSize(info);
+      if (info != null && size != null) {
+        if (mounted) {
+          setState(() {
+            _activePreviewSize = size;
+            _isCameraOpen = true;
+          });
+        }
+        return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
     }
     return _isCameraOpen;
   }
 
-  Future<List<PreviewSize>> _readPreviewSizesFromController() async {
-    await _cameraController?.getAllPreviewSizes();
-    return List<PreviewSize>.from(
-      _cameraController?.getPreviewSizes ?? <PreviewSize>[],
-    );
-  }
-
-  void _closeCamera() {
-    try {
-      _cameraController?.closeCamera();
-      setState(() {
-        _isCameraOpen = false;
-        _statusMessage = '摄像头已关闭';
-      });
-    } catch (e) {
-      setState(() {
-        _errorMessage = '关闭失败: $e';
-      });
+  String _normalizeOpenError(Object error) {
+    final String message = error.toString();
+    if (message.contains("type 'Null' is not a subtype of type 'String'")) {
+      return '摄像头初始化中，请稍后重试';
     }
+    return '打开失败: $message';
   }
 
   void _setupCallbacks() {
     _cameraController?.cameraStateCallback = (UVCCameraState state) {
       if (!mounted) return;
-      setState(() {
-        _isCameraOpen = state == UVCCameraState.opened;
-      });
-      _updateStatusMessage('摄像头状态: ${_getStateText(state)}');
       if (state == UVCCameraState.opened) {
-        unawaited(_loadPreviewSizesAndApplyPreferred());
+        setState(() {
+          _isCameraOpen = true;
+          _isOpeningCamera = false;
+          _isInitializing = false;
+          _errorMessage = null;
+        });
+        _updateStatusMessage('摄像头已打开');
+        unawaited(_syncCameraDetails(applyPreferredResolution: true));
+        return;
       }
+      if (state == UVCCameraState.closed) {
+        setState(() {
+          _isCameraOpen = false;
+          _isOpeningCamera = false;
+          _isInitializing = false;
+        });
+        _updateStatusMessage('摄像头已关闭');
+        return;
+      }
+      setState(() {
+        _isOpeningCamera = false;
+        _isInitializing = false;
+      });
+      _updateStatusMessage('摄像头状态异常');
     };
-
     _cameraController?.msgCallback = (String msg) {
-      _updateStatusMessage(msg);
+      final String text = msg.trim();
+      if (text.isNotEmpty) _updateStatusMessage(text);
     };
-
     _cameraController?.clickTakePictureButtonCallback = (String path) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('拍照完成: $path')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('拍照完成: $path')));
     };
   }
 
-  Future<void> _loadPreviewSizesAndApplyPreferred() async {
+  Future<Map<String, dynamic>?> _readCameraRequestInfo() async {
     try {
-      final List<PreviewSize> sizes = await _readPreviewSizesFromController();
-      if (!mounted) return;
-      if (sizes.isEmpty) {
-        _updateStatusMessage('未获取到可用分辨率');
+      final String? raw =
+          await _cameraController?.getCurrentCameraRequestParameters();
+      if (raw == null || raw.isEmpty) {
+        return null;
       }
-
-      final PreviewSize? preferred = _pickPreferredResolution(sizes);
-      setState(() {
-        _previewSizes = sizes;
-        _currentResolution = preferred;
-      });
-
-      if (preferred != null) {
-        try {
-          _cameraController?.updateResolution(preferred);
-          _updateStatusMessage(
-            '分辨率: ${preferred.width ?? 0}x${preferred.height ?? 0}',
-          );
-        } catch (e) {
-          debugPrint('UVCCameraScreen: updateResolution failed: $e');
-        }
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) {
+        return decoded;
+      }
+      if (decoded is Map) {
+        return decoded.map((dynamic k, dynamic v) => MapEntry(k.toString(), v));
       }
     } catch (e) {
-      debugPrint('UVCCameraScreen: load sizes failed: $e');
+      debugPrint('UVCCameraScreen: read request failed: $e');
+    }
+    return null;
+  }
+
+  Future<List<PreviewSize>> _readSupportedPreviewSizes() async {
+    try {
+      await _cameraController?.getAllPreviewSizes();
+      return List<PreviewSize>.from(
+          _cameraController?.getPreviewSizes ?? <PreviewSize>[]);
+    } catch (e) {
+      debugPrint('UVCCameraScreen: read preview sizes failed: $e');
+      return <PreviewSize>[];
     }
   }
 
-  PreviewSize? _pickPreferredResolution(List<PreviewSize> sizes) {
-    if (sizes.isEmpty) return null;
-
-    PreviewSize? findExact(int width, int height) {
-      for (final PreviewSize size in sizes) {
-        if ((size.width ?? 0) == width && (size.height ?? 0) == height) {
-          return size;
+  Future<void> _syncCameraDetails(
+      {required bool applyPreferredResolution}) async {
+    final Map<String, dynamic>? info = await _readCameraRequestInfo();
+    final List<PreviewSize> sizes = await _readSupportedPreviewSizes();
+    final PreviewSize? preferred = _pickPreferredPreviewSize(sizes);
+    PreviewSize? active = _extractPreviewSize(info);
+    if (applyPreferredResolution &&
+        !_didApplyPreferredResolution &&
+        preferred != null &&
+        !_samePreviewSize(active, preferred)) {
+      try {
+        _cameraController?.updateResolution(preferred);
+        _didApplyPreferredResolution = true;
+        await Future<void>.delayed(const Duration(milliseconds: 450));
+        final Map<String, dynamic>? refreshed = await _readCameraRequestInfo();
+        active = _extractPreviewSize(refreshed) ?? preferred;
+        if (mounted && refreshed != null) {
+          _activePreviewSize = _extractPreviewSize(refreshed) ?? preferred;
         }
+      } catch (e) {
+        debugPrint('UVCCameraScreen: apply preferred resolution failed: $e');
       }
+    } else if (preferred != null) {
+      _didApplyPreferredResolution = true;
+    }
+    if (!mounted) return;
+    setState(() {
+      _preferredPreviewSize = preferred;
+      _activePreviewSize = active ?? preferred;
+    });
+  }
+
+  PreviewSize? _pickPreferredPreviewSize(List<PreviewSize> sizes) {
+    if (sizes.isEmpty) return null;
+    return sizes.reduce((PreviewSize a, PreviewSize b) {
+      final int aArea = (a.width ?? 0) * (a.height ?? 0);
+      final int bArea = (b.width ?? 0) * (b.height ?? 0);
+      return bArea > aArea ? b : a;
+    });
+  }
+
+  PreviewSize? _extractPreviewSize(Map<String, dynamic>? info) {
+    if (info == null) {
       return null;
     }
-
-    return findExact(1280, 720) ??
-        findExact(960, 540) ??
-        findExact(854, 480) ??
-        findExact(640, 480) ??
-        sizes.reduce((PreviewSize a, PreviewSize b) {
-          final int targetArea = 1280 * 720;
-          final int aArea = (a.width ?? 0) * (a.height ?? 0);
-          final int bArea = (b.width ?? 0) * (b.height ?? 0);
-          final int aDiff = (aArea - targetArea).abs();
-          final int bDiff = (bArea - targetArea).abs();
-          return aDiff <= bDiff ? a : b;
-        });
+    final int? width = _toInt(info['previewWidth']);
+    final int? height = _toInt(info['previewHeight']);
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      return null;
+    }
+    return PreviewSize(width: width, height: height);
   }
 
-  void _updateStatusMessage(
-    String message, {
-    Duration minInterval = const Duration(milliseconds: 300),
-  }) {
-    if (!mounted) return;
-    if (message.isEmpty) return;
+  int? _toInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
+  }
+
+  bool _samePreviewSize(PreviewSize? a, PreviewSize? b) {
+    if (a == null || b == null) return false;
+    return a.width == b.width && a.height == b.height;
+  }
+
+  String _formatPreviewSize(PreviewSize? size) {
+    final int width = size?.width ?? 0;
+    final int height = size?.height ?? 0;
+    if (width <= 0 || height <= 0) return '--';
+    return '${width}x$height';
+  }
+
+  void _updateStatusMessage(String message,
+      {Duration minInterval = const Duration(milliseconds: 300)}) {
+    if (!mounted || message.isEmpty) return;
     final DateTime now = DateTime.now();
     if (_statusMessage == message) return;
     if (now.difference(_lastStatusUpdate) < minInterval) return;
-
     _lastStatusUpdate = now;
+    setState(() => _statusMessage = message);
+  }
+
+  void _setErrorMessage(String message) {
+    if (!mounted) return;
     setState(() {
+      _errorMessage = message;
       _statusMessage = message;
+      _isOpeningCamera = false;
+      _isInitializing = false;
     });
   }
 
-  Future<void> _setFullscreen(bool value) async {
-    if (!mounted || _isFullscreen == value) return;
-    setState(() {
-      _isFullscreen = value;
-    });
-    if (value) {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      return;
-    }
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  void _resetPreviewTransform() {
+    _previewScale = 1.0;
+    _previewScaleStart = 1.0;
+    _previewOffset = Offset.zero;
+    _previewOffsetStart = Offset.zero;
+    _gestureStartFocalPoint = Offset.zero;
   }
 
   Future<void> _takePicture() async {
     try {
       final String? path = await _cameraController?.takePicture();
-      if (!mounted) return;
-      if (path != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('照片已保存: $path')),
-        );
-      }
+      if (!mounted || path == null || path.isEmpty) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('照片已保存: $path')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('拍照失败: $e')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('拍照失败: $e')));
     }
   }
 
   Future<bool> _ensureRecordingPermissions() async {
     final PermissionStatus micStatus = await Permission.microphone.request();
-    if (!micStatus.isGranted) {
-      return false;
-    }
-
+    if (!micStatus.isGranted) return false;
     final PermissionStatus storageStatus = await Permission.storage.request();
     final PermissionStatus videosStatus = await Permission.videos.request();
     return storageStatus.isGranted ||
@@ -439,87 +442,56 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
 
   Future<void> _toggleRecording() async {
     if (_isStoppingRecording) return;
-    if (_isRecording) {
-      await _stopRecording();
-      return;
-    }
-    await _startRecording();
+    if (_isRecording) return _stopRecording();
+    return _startRecording();
   }
 
   Future<void> _startRecording() async {
     final bool permissionReady = await _ensureRecordingPermissions();
     if (!permissionReady) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('录像权限不足，请授予麦克风和存储权限')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('录像权限不足，请授予麦克风和存储权限')));
+      }
       return;
     }
-
     setState(() {
       _isRecording = true;
       _isStoppingRecording = false;
       _errorMessage = null;
     });
     _updateStatusMessage('开始录像...');
-
-    final Future<String?>? sessionFuture = _cameraController?.captureVideo();
-    if (sessionFuture == null) {
-      _handleRecordingFailure('录像失败：控制器不可用');
-      return;
-    }
-    _recordingSessionFuture = sessionFuture;
-
-    unawaited(
-      sessionFuture.then((String? path) {
-        if (!mounted) return;
-        setState(() {
-          _isRecording = false;
-          _isStoppingRecording = false;
-          if (_recordingSessionFuture == sessionFuture) {
-            _recordingSessionFuture = null;
-          }
-        });
-
-        if (path == null || path.isEmpty) {
-          _updateStatusMessage('录像已停止');
-          return;
-        }
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('视频已保存: $path')));
-      }).catchError((Object error) {
-        final String message = '录像失败: $error';
-        _handleRecordingFailure(message);
-      }),
-    );
+    final Future<String?>? session = _cameraController?.captureVideo();
+    if (session == null) return _handleRecordingFailure('录像失败：控制器不可用');
+    _recordingFuture = session;
+    unawaited(session.then((String? path) {
+      if (!mounted) return;
+      setState(() {
+        _isRecording = false;
+        _isStoppingRecording = false;
+        if (_recordingFuture == session) _recordingFuture = null;
+      });
+      if (path == null || path.isEmpty) return _updateStatusMessage('录像已停止');
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('视频已保存: $path')));
+    }).catchError((Object error) {
+      _handleRecordingFailure('录像失败: $error');
+    }));
   }
 
   Future<void> _stopRecording() async {
     if (!_isRecording) return;
-    setState(() {
-      _isStoppingRecording = true;
-    });
+    setState(() => _isStoppingRecording = true);
     _updateStatusMessage('正在停止录像...');
-
     final Future<String?>? stopFuture = _cameraController?.captureVideo();
     if (stopFuture == null) {
-      if (mounted) {
-        setState(() {
-          _isStoppingRecording = false;
-        });
-      }
+      if (mounted) setState(() => _isStoppingRecording = false);
       return;
     }
-
-    // 插件通过再次调用 captureVideo() 触发停止。
-    // 此次 Future 可能没有返回结果，因此只做兜底错误日志。
-    unawaited(
-      stopFuture.catchError((Object error) {
-        debugPrint('UVCCameraScreen: stop recording call failed: $error');
-        return null;
-      }),
-    );
+    unawaited(stopFuture.catchError((Object error) {
+      debugPrint('UVCCameraScreen: stop recording failed: $error');
+      return null;
+    }));
   }
 
   void _handleRecordingFailure(String message) {
@@ -527,144 +499,261 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     setState(() {
       _isRecording = false;
       _isStoppingRecording = false;
-      _recordingSessionFuture = null;
+      _recordingFuture = null;
     });
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  String _getStateText(UVCCameraState state) {
-    switch (state) {
-      case UVCCameraState.opened:
-        return '已打开';
-      case UVCCameraState.closed:
-        return '已关闭';
-      case UVCCameraState.error:
-        return '错误';
-    }
-  }
-
-  void _showResolutionDialog() {
-    if (_previewSizes.isEmpty) return;
-    showModalBottomSheet<void>(
-      context: context,
-      builder: (BuildContext context) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: _previewSizes.map((PreviewSize size) {
-              final String label = '${size.width ?? 0}x${size.height ?? 0}';
-              final bool selected = _currentResolution?.width == size.width &&
-                  _currentResolution?.height == size.height;
-              return ListTile(
-                title: Text(label),
-                trailing: selected ? const Icon(Icons.check) : null,
-                onTap: () {
-                  try {
-                    _cameraController?.updateResolution(size);
-                    setState(() {
-                      _currentResolution = size;
-                    });
-                    _updateStatusMessage('分辨率: $label');
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('切换分辨率失败: $e')),
-                    );
-                  }
-                  Navigator.of(context).pop();
-                },
-              );
-            }).toList(),
-          ),
-        );
-      },
-    );
   }
 
   Widget _buildStatusBar() {
     if (_statusMessage == null && _errorMessage == null) {
       return const SizedBox.shrink();
     }
-
     final bool isError = _errorMessage != null;
-    final Color color = isError
-        ? Colors.red.withValues(alpha: 0.12)
-        : AppColors.primary.withValues(alpha: 0.12);
-    final Color textColor = isError ? Colors.red : AppColors.primary;
-    final String text = _errorMessage ?? _statusMessage ?? '';
-
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: color,
+      color: isError
+          ? Colors.red.withValues(alpha: 0.12)
+          : AppColors.primary.withValues(alpha: 0.12),
       child: Text(
-        text,
+        _errorMessage ?? _statusMessage ?? '',
         style: TextStyle(
-          color: textColor,
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
-        ),
+            color: isError ? Colors.red : AppColors.primary,
+            fontSize: 14,
+            fontWeight: FontWeight.w500),
         textAlign: TextAlign.center,
       ),
     );
   }
 
+  double _currentAspectRatio() {
+    final int width =
+        (_activePreviewSize?.width ?? _preferredPreviewSize?.width) ?? 16;
+    final int height =
+        (_activePreviewSize?.height ?? _preferredPreviewSize?.height) ?? 9;
+    if (width <= 0 || height <= 0) {
+      return 16 / 9;
+    }
+    return width / height;
+  }
+
+  double _maxPreviewScale(Size viewport, double devicePixelRatio) {
+    final int width =
+        _activePreviewSize?.width ?? _preferredPreviewSize?.width ?? 0;
+    final int height =
+        _activePreviewSize?.height ?? _preferredPreviewSize?.height ?? 0;
+    if (width <= 0 || height <= 0) {
+      return 3.0;
+    }
+    final double displayWidthPx = viewport.width * devicePixelRatio;
+    final double displayHeightPx = viewport.height * devicePixelRatio;
+    if (displayWidthPx <= 0 || displayHeightPx <= 0) {
+      return 3.0;
+    }
+    final double widthRatio = width / displayWidthPx;
+    final double heightRatio = height / displayHeightPx;
+    final double safeScale =
+        widthRatio < heightRatio ? widthRatio : heightRatio;
+    return safeScale.clamp(1.0, 4.0);
+  }
+
+  Offset _clampPreviewOffset(Offset value, Size viewport, double scale) {
+    final double maxDx = (viewport.width * scale - viewport.width) / 2;
+    final double maxDy = (viewport.height * scale - viewport.height) / 2;
+    if (maxDx <= 0 && maxDy <= 0) {
+      return Offset.zero;
+    }
+    return Offset(
+      value.dx.clamp(-maxDx, maxDx),
+      value.dy.clamp(-maxDy, maxDy),
+    );
+  }
+
+  Widget _buildPlatformPreview({
+    required double width,
+    required double height,
+  }) {
+    if (_cameraController == null) {
+      return const SizedBox.shrink();
+    }
+    return KeyedSubtree(
+      key: _previewKey,
+      child: RepaintBoundary(
+        child: UVCCameraView(
+          cameraController: _cameraController!,
+          width: width,
+          height: height,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInteractivePreview(BoxConstraints constraints) {
+    final double aspectRatio = _currentAspectRatio();
+    return Center(
+      child: AspectRatio(
+        aspectRatio: aspectRatio,
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints innerConstraints) {
+            final Size viewport = Size(
+              innerConstraints.maxWidth,
+              innerConstraints.maxHeight,
+            );
+            final double maxScale = _maxPreviewScale(
+              viewport,
+              MediaQuery.of(context).devicePixelRatio,
+            );
+            final double scale = _previewScale.clamp(1.0, maxScale);
+            final Offset offset = _clampPreviewOffset(
+              _previewOffset,
+              viewport,
+              scale,
+            );
+            final double childWidth = viewport.width * scale;
+            final double childHeight = viewport.height * scale;
+            final double left = (viewport.width - childWidth) / 2 + offset.dx;
+            final double top = (viewport.height - childHeight) / 2 + offset.dy;
+
+            return ClipRect(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onDoubleTap: _isCameraOpen
+                    ? () {
+                        setState(_resetPreviewTransform);
+                      }
+                    : null,
+                onScaleStart: _isCameraOpen
+                    ? (ScaleStartDetails details) {
+                        _previewScaleStart = _previewScale;
+                        _previewOffsetStart = _previewOffset;
+                        _gestureStartFocalPoint = details.localFocalPoint;
+                      }
+                    : null,
+                onScaleUpdate: _isCameraOpen
+                    ? (ScaleUpdateDetails details) {
+                        final double nextScale =
+                            (_previewScaleStart * details.scale)
+                                .clamp(1.0, maxScale);
+                        Offset nextOffset = _previewOffsetStart +
+                            (details.localFocalPoint - _gestureStartFocalPoint);
+                        if (nextScale <= 1.0) {
+                          nextOffset = Offset.zero;
+                        } else {
+                          nextOffset = _clampPreviewOffset(
+                            nextOffset,
+                            viewport,
+                            nextScale,
+                          );
+                        }
+                        setState(() {
+                          _previewScale = nextScale;
+                          _previewOffset = nextOffset;
+                        });
+                      }
+                    : null,
+                child: Stack(
+                  children: <Widget>[
+                    Positioned(
+                      left: left,
+                      top: top,
+                      width: childWidth,
+                      height: childHeight,
+                      child: _buildPlatformPreview(
+                        width: childWidth,
+                        height: childHeight,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _buildPreviewSurface() {
-    final BorderRadius borderRadius = BorderRadius.circular(12);
+    final BorderRadius radius = BorderRadius.circular(12);
+    final Widget preview = LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        return _buildInteractivePreview(constraints);
+      },
+    );
     return Container(
       margin: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.black,
-        borderRadius: borderRadius,
+        borderRadius: radius,
         boxShadow: AppShadows.medium,
       ),
       child: ClipRRect(
-        borderRadius: borderRadius,
+        borderRadius: radius,
         child: Stack(
           fit: StackFit.expand,
           children: <Widget>[
-            if (_cameraController != null)
-              RepaintBoundary(
-                child: UVCCameraView(
-                  cameraController: _cameraController!,
-                  width: double.infinity,
-                  height: double.infinity,
-                ),
-              )
-            else
-              const SizedBox.shrink(),
-            if (_isInitializing || _isOpeningCamera)
+            preview,
+            if (_isInitializing || (_isOpeningCamera && !_isCameraOpen))
               const Center(
-                child: CircularProgressIndicator(color: Colors.white),
-              ),
+                  child: CircularProgressIndicator(color: Colors.white)),
             if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
-              const Center(
-                child: Text(
-                  '点击“打开”开始预览',
-                  style: TextStyle(color: Colors.white70, fontSize: 16),
-                ),
-              ),
-            Positioned(
-              right: 12,
-              bottom: 12,
-              child: SafeArea(
-                top: false,
-                minimum: const EdgeInsets.only(bottom: 4, right: 4),
-                child: IconButton.filledTonal(
-                  onPressed: () => unawaited(_setFullscreen(!_isFullscreen)),
-                  icon: Icon(
-                    _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+              Positioned.fill(
+                child: Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => unawaited(_openCamera()),
+                    child: const SizedBox.expand(),
                   ),
                 ),
               ),
-            ),
+            if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
+              const Center(
+                  child: Text('点击“打开”开始预览',
+                      style: TextStyle(color: Colors.white70, fontSize: 16))),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildDeviceInfo(bool isDark) {
+  Widget _buildMetric(String title, String value, bool isDark,
+      {bool wide = false}) {
+    return Container(
+      constraints: BoxConstraints(
+          minWidth: wide ? 240 : 132, maxWidth: wide ? 999 : 180),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.05)
+            : Colors.black.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.06)
+                : Colors.black.withValues(alpha: 0.04)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(title,
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: isDark ? Colors.white60 : Colors.black45)),
+          const SizedBox(height: 4),
+          Text(value,
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: isDark ? Colors.white : Colors.black87)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDeviceOverview(bool isDark) {
     return Consumer<UsbCaptureService>(
       builder:
           (BuildContext context, UsbCaptureService service, Widget? child) {
@@ -672,49 +761,131 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
         if (device == null) {
           return const Padding(
             padding: EdgeInsets.all(16),
-            child: Text(
-              '未检测到 USB 采集卡',
-              style: TextStyle(color: Colors.grey),
-            ),
+            child: Text('未检测到 USB 采集卡', style: TextStyle(color: Colors.grey)),
           );
         }
-        return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: isDark ? AppColors.darkSurface : AppColors.lightSurface,
-            borderRadius: BorderRadius.circular(8),
-          ),
+        final Widget header = InkWell(
+          onTap: () =>
+              setState(() => _isOverviewExpanded = !_isOverviewExpanded),
+          borderRadius: BorderRadius.circular(16),
           child: Row(
             children: <Widget>[
-              Icon(Icons.videocam, color: AppColors.primary, size: 24),
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.usb, color: AppColors.primary, size: 24),
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
                     Text(
                       device.productName ?? 'USB 采集卡',
                       style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
                         color: isDark ? Colors.white : Colors.black87,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
-                      'VID: 0x${device.vid.toRadixString(16).toUpperCase().padLeft(4, '0')} | '
-                      'PID: 0x${device.pid.toRadixString(16).toUpperCase().padLeft(4, '0')}',
+                      _formatPreviewSize(_activePreviewSize),
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
                         color: isDark ? Colors.white70 : Colors.black54,
                       ),
                     ),
                   ],
                 ),
               ),
-              const Icon(Icons.circle, color: Colors.green, size: 10),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: (_isCameraOpen ? Colors.green : Colors.orange)
+                      .withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  _isCameraOpen ? '预览中' : '待打开',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: _isCameraOpen ? Colors.green : Colors.orange,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                _isOverviewExpanded ? Icons.expand_less : Icons.expand_more,
+                color: isDark ? Colors.white70 : Colors.black54,
+              ),
             ],
+          ),
+        );
+        final Widget details = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: <Widget>[
+                _buildMetric(
+                  'VID',
+                  '0x${device.vid.toRadixString(16).toUpperCase().padLeft(4, '0')}',
+                  isDark,
+                ),
+                _buildMetric(
+                  'PID',
+                  '0x${device.pid.toRadixString(16).toUpperCase().padLeft(4, '0')}',
+                  isDark,
+                ),
+                _buildMetric(
+                  '当前分辨率',
+                  _formatPreviewSize(_activePreviewSize),
+                  isDark,
+                ),
+                _buildMetric(
+                  '默认分辨率',
+                  _formatPreviewSize(_preferredPreviewSize),
+                  isDark,
+                ),
+                _buildMetric(
+                  '最新状态',
+                  _errorMessage ?? _statusMessage ?? '--',
+                  isDark,
+                  wide: true,
+                ),
+              ],
+            ),
+          ],
+        );
+        return Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: isDark ? null : AppShadows.small,
+          ),
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                header,
+                if (_isOverviewExpanded) details,
+              ],
+            ),
           ),
         );
       },
@@ -735,39 +906,17 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
           alignment: WrapAlignment.center,
           children: <Widget>[
             _ActionButton(
-              icon: _isCameraOpen ? Icons.videocam_off : Icons.videocam,
-              label: _isCameraOpen ? '关闭' : '打开',
-              color: _isCameraOpen ? Colors.red : AppColors.primary,
-              onPressed: (_isInitializing || _isOpeningCamera)
-                  ? null
-                  : () {
-                      if (_isCameraOpen) {
-                        _closeCamera();
-                      } else {
-                        unawaited(_openCamera());
-                      }
-                    },
-            ),
-            _ActionButton(
               icon: Icons.camera_alt,
-              label: '拍照',
+              label: '截屏',
               color: Colors.blue,
               onPressed: _isCameraOpen ? () => unawaited(_takePicture()) : null,
             ),
             _ActionButton(
               icon: _isRecording ? Icons.stop : Icons.videocam,
-              label: _isRecording ? '停止' : '录像',
+              label: _isRecording ? '停止录屏' : '录屏',
               color: _isRecording ? Colors.red : Colors.orange,
               onPressed: (_isCameraOpen && !_isStoppingRecording)
                   ? () => unawaited(_toggleRecording())
-                  : null,
-            ),
-            _ActionButton(
-              icon: Icons.aspect_ratio,
-              label: '分辨率',
-              color: Colors.teal,
-              onPressed: (_isCameraOpen && _previewSizes.isNotEmpty)
-                  ? _showResolutionDialog
                   : null,
             ),
           ],
@@ -776,13 +925,15 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+  Widget _buildNormalLayout(bool isDark) {
+    final int previewFlex = _isOverviewExpanded ? 6 : 9;
     return Scaffold(
       backgroundColor:
           isDark ? AppColors.darkBackground : AppColors.lightBackground,
       appBar: AppBar(
+        leading: IconButton(
+            icon: const Icon(Icons.close),
+            onPressed: () => unawaited(_closePage())),
         title: const Text('USB 摄像头'),
         backgroundColor: AppColors.primary,
       ),
@@ -790,16 +941,20 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
         children: <Widget>[
           _buildStatusBar(),
           Expanded(
-            child: KeyedSubtree(
-              key: const ValueKey<String>('uvc_camera_preview'),
-              child: _buildPreviewSurface(),
-            ),
+            flex: previewFlex,
+            child: _buildPreviewSurface(),
           ),
-          _buildDeviceInfo(isDark),
+          _buildDeviceOverview(isDark),
           _buildControls(),
         ],
       ),
     );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isDark = Theme.of(context).brightness == Brightness.dark;
+    return _buildNormalLayout(isDark);
   }
 }
 
@@ -828,33 +983,21 @@ class _ActionButtonState extends State<_ActionButton> {
   Future<void> _handleTap() async {
     final VoidCallback? onPressed = widget.onPressed;
     if (onPressed == null || _isLocked) return;
-
     final DateTime now = DateTime.now();
-    if (now.difference(_lastTapAt) < _debounceDuration) {
-      return;
-    }
-
+    if (now.difference(_lastTapAt) < _debounceDuration) return;
     _lastTapAt = now;
-    setState(() {
-      _isLocked = true;
-    });
-
+    setState(() => _isLocked = true);
     try {
       onPressed();
     } finally {
       await Future<void>.delayed(_debounceDuration);
-      if (mounted) {
-        setState(() {
-          _isLocked = false;
-        });
-      }
+      if (mounted) setState(() => _isLocked = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final bool enabled = widget.onPressed != null && !_isLocked;
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
@@ -865,20 +1008,15 @@ class _ActionButtonState extends State<_ActionButton> {
             onTap: enabled ? () => unawaited(_handleTap()) : null,
             borderRadius: BorderRadius.circular(12),
             child: SizedBox(
-              width: 56,
-              height: 56,
-              child: Icon(widget.icon, color: Colors.white, size: 28),
-            ),
+                width: 56,
+                height: 56,
+                child: Icon(widget.icon, color: Colors.white, size: 28)),
           ),
         ),
         const SizedBox(height: 4),
-        Text(
-          widget.label,
-          style: TextStyle(
-            fontSize: 11,
-            color: enabled ? Colors.white : Colors.grey,
-          ),
-        ),
+        Text(widget.label,
+            style: TextStyle(
+                fontSize: 11, color: enabled ? Colors.white : Colors.grey)),
       ],
     );
   }

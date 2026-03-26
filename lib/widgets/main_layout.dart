@@ -269,13 +269,6 @@ class _MainLayoutState extends State<MainLayout> {
                       onClose: () => setState(() => _showUserMenu = false),
                     ),
                   // USB 采集卡浮动按钮（Android 平台，右下角，不挡底部导航）
-                  if (Platform.isAndroid)
-                    Positioned(
-                      right: 16,
-                      bottom: MediaQuery.of(context).padding.bottom +
-                          (widget.showBottomNav ? 100 : 16),
-                      child: _buildUsbCaptureFab(context),
-                    ),
                 ],
               ),
             ),
@@ -299,6 +292,7 @@ class _MainLayoutState extends State<MainLayout> {
   }
 
   /// 构建 USB 采集卡浮动按钮
+  // ignore: unused_element
   Widget _buildUsbCaptureFab(BuildContext context) {
     return Consumer<UsbCaptureService>(
       builder: (context, service, _) {
