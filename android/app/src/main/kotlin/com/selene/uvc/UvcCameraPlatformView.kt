@@ -32,6 +32,10 @@ class UvcCameraPlatformView(
     args: Any?,
 ) : PlatformView, ICameraStateCallBack {
 
+    companion object {
+        private const val TAG = "SeleneUvcView"
+    }
+
     private val rootView = FrameLayout(context)
     private val cameraView = TextureView(context)
     private val cameraParams = buildCameraParams(args)
@@ -74,7 +78,10 @@ class UvcCameraPlatformView(
     }
 
     fun initializeCamera() {
-        // Texture lifecycle drives actual setup.
+        // 如果 TextureView 已经准备好，且相机已连接等待打开，立即打开
+        if (cameraView.surfaceTexture != null && pendingOpen && currentCamera != null) {
+            tryOpenCurrentCamera()
+        }
     }
 
     fun openCamera(result: MethodChannel.Result) {
@@ -223,7 +230,17 @@ class UvcCameraPlatformView(
     private fun bindTextureLifecycle() {
         cameraView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                // 设置默认缓冲区大小
+                val targetWidth = if (latestPreviewWidth > 0) latestPreviewWidth else BuildConfig.UVC_PREFERRED_WIDTH
+                val targetHeight = if (latestPreviewHeight > 0) latestPreviewHeight else BuildConfig.UVC_PREFERRED_HEIGHT
+                surface.setDefaultBufferSize(targetWidth, targetHeight)
+                
                 registerCameraClient()
+                
+                // 如果相机已经连接且等待打开，立即打开
+                if (pendingOpen && currentCamera != null) {
+                    tryOpenCurrentCamera()
+                }
             }
 
             override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
@@ -241,7 +258,13 @@ class UvcCameraPlatformView(
     }
 
     private fun registerCameraClient() {
-        if (cameraClient != null) return
+        if (cameraClient != null) {
+            // 如果 client 已注册，但 SurfaceTexture 刚准备好，检查是否需要打开相机
+            if (pendingOpen && currentCamera != null && cameraView.surfaceTexture != null) {
+                tryOpenCurrentCamera()
+            }
+            return
+        }
 
         cameraClient = MultiCameraClient(activity, object : IDeviceConnectCallBack {
             override fun onAttachDev(device: UsbDevice?) {
@@ -257,18 +280,22 @@ class UvcCameraPlatformView(
                 requestingPermission.set(false)
                 currentCamera?.cancel(true)
                 currentCamera = null
+                pendingOpen = false
             }
 
             override fun onConnectDev(device: UsbDevice?, ctrlBlock: USBMonitor.UsbControlBlock?) {
                 device ?: return
                 ctrlBlock ?: return
                 val camera = cameraMap[device.deviceId] ?: return
+                
                 camera.setUsbControlBlock(ctrlBlock)
                 currentCamera?.cancel(true)
                 currentCamera = SettableFuture()
                 currentCamera?.set(camera)
                 requestingPermission.set(false)
-                if (pendingOpen) {
+                
+                // 如果等待打开且 SurfaceTexture 已准备好，立即打开相机
+                if (pendingOpen && cameraView.surfaceTexture != null) {
                     tryOpenCurrentCamera()
                 }
             }
@@ -302,7 +329,23 @@ class UvcCameraPlatformView(
 
     private fun tryOpenCurrentCamera() {
         val camera = getCurrentCamera() ?: return
-        camera.openCamera(cameraView, getCameraRequest())
+        
+        // 确保 SurfaceTexture 已准备好
+        val surfaceTexture = cameraView.surfaceTexture
+        if (surfaceTexture == null) {
+            pendingOpen = true
+            return
+        }
+        
+        pendingOpen = false
+        
+        // 设置默认缓冲区大小
+        val request = getCameraRequest()
+        surfaceTexture.setDefaultBufferSize(request.previewWidth, request.previewHeight)
+        latestPreviewWidth = request.previewWidth
+        latestPreviewHeight = request.previewHeight
+        
+        camera.openCamera(cameraView, request)
         camera.setCameraStateCallBack(this)
     }
 
@@ -411,10 +454,11 @@ class UvcCameraPlatformView(
     }
 
     private fun getCameraRequest(): com.jiangdg.ausbc.camera.bean.CameraRequest {
+        // 使用 NORMAL 渲染模式直接渲染到 TextureView，避免 OPENGL 模式下的黑屏问题
         return com.jiangdg.ausbc.camera.bean.CameraRequest.Builder()
             .setPreviewWidth(BuildConfig.UVC_PREFERRED_WIDTH)
             .setPreviewHeight(BuildConfig.UVC_PREFERRED_HEIGHT)
-            .setRenderMode(com.jiangdg.ausbc.camera.bean.CameraRequest.RenderMode.OPENGL)
+            .setRenderMode(com.jiangdg.ausbc.camera.bean.CameraRequest.RenderMode.NORMAL)
             .setDefaultRotateType(com.jiangdg.ausbc.render.env.RotateType.ANGLE_0)
             .setAudioSource(com.jiangdg.ausbc.camera.bean.CameraRequest.AudioSource.SOURCE_SYS_MIC)
             .setAspectRatioShow(true)

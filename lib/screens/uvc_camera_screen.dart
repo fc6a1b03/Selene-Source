@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:selene/design/design_system.dart';
@@ -29,6 +30,8 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   bool _isRecording = false;
   bool _isStoppingRecording = false;
   bool _isOverviewExpanded = false;
+  bool _isInfoPanelMinimized = false;
+  bool _isControlPanelMinimized = false;
   bool _isClosingPage = false;
   bool _didApplyPreferredResolution = false;
 
@@ -41,6 +44,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(_enterImmersiveMode());
     _cameraController = UVCCameraController();
     _setupCallbacks();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -51,9 +55,25 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
 
   @override
   void dispose() {
+    debugPrint('UVCCameraScreen: disposing...');
+    unawaited(_exitImmersiveMode());
     _detachUsbDisconnectListener();
     _releaseCameraResources();
+    // 清理状态变量
+    _recordingFuture = null;
+    _activePreviewSize = null;
+    _preferredPreviewSize = null;
+    _didApplyPreferredResolution = false;
+    debugPrint('UVCCameraScreen: disposed');
     super.dispose();
+  }
+
+  Future<void> _enterImmersiveMode() {
+    return SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  Future<void> _exitImmersiveMode() {
+    return SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   }
 
   void _attachUsbDisconnectListener() {
@@ -65,9 +85,23 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
         return;
       }
       if (event.type == UsbCaptureEventType.detached) {
+        // USB 拔出时显示提示并强制返回首页
+        _showUsbDetachedMessage();
         unawaited(_closePage());
       }
     });
+  }
+
+  /// 显示 USB 已拔出的提示
+  void _showUsbDetachedMessage() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('USB 设备已断开'),
+        duration: Duration(seconds: 2),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   void _detachUsbDisconnectListener() {
@@ -90,15 +124,21 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     }
   }
 
-  Future<void> _closePage() async {
+  Future<void> _closePage({bool returnToHome = true}) async {
     if (_isClosingPage) {
       return;
     }
     _isClosingPage = true;
     _detachUsbDisconnectListener();
     _releaseCameraResources();
+
     if (mounted) {
-      Navigator.of(context).pop();
+      if (returnToHome) {
+        // USB 拔出时返回首页，确保清理所有中间页面
+        Navigator.of(context).popUntil((route) => route.isFirst);
+      } else {
+        Navigator.of(context).pop();
+      }
     }
   }
 
@@ -242,6 +282,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   void _setupCallbacks() {
     _cameraController?.cameraStateCallback = (UVCCameraState state) {
       if (!mounted) return;
+      debugPrint('UVCCameraScreen: Camera state changed: $state');
       if (state == UVCCameraState.opened) {
         setState(() {
           _isCameraOpen = true;
@@ -262,6 +303,15 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
         _updateStatusMessage('摄像头已关闭');
         return;
       }
+      if (state == UVCCameraState.error) {
+        setState(() {
+          _isCameraOpen = false;
+          _isOpeningCamera = false;
+          _isInitializing = false;
+        });
+        _updateStatusMessage('摄像头出错');
+        return;
+      }
       setState(() {
         _isOpeningCamera = false;
         _isInitializing = false;
@@ -270,6 +320,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     };
     _cameraController?.msgCallback = (String msg) {
       final String text = msg.trim();
+      debugPrint('UVCCameraScreen: Camera message: $text');
       if (text.isNotEmpty) _updateStatusMessage(text);
     };
     _cameraController?.clickTakePictureButtonCallback = (String path) {
@@ -491,39 +542,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Widget _buildStatusBar() {
-    if (_statusMessage == null && _errorMessage == null) {
-      return const SizedBox.shrink();
-    }
-    final bool isError = _errorMessage != null;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      color: isError
-          ? Colors.red.withValues(alpha: 0.12)
-          : AppColors.primary.withValues(alpha: 0.12),
-      child: Text(
-        _errorMessage ?? _statusMessage ?? '',
-        style: TextStyle(
-            color: isError ? Colors.red : AppColors.primary,
-            fontSize: 14,
-            fontWeight: FontWeight.w500),
-        textAlign: TextAlign.center,
-      ),
-    );
-  }
-
-  double _currentAspectRatio() {
-    final int width =
-        (_activePreviewSize?.width ?? _preferredPreviewSize?.width) ?? 16;
-    final int height =
-        (_activePreviewSize?.height ?? _preferredPreviewSize?.height) ?? 9;
-    if (width <= 0 || height <= 0) {
-      return 16 / 9;
-    }
-    return width / height;
-  }
-
   Widget _buildPlatformPreview({
     required double width,
     required double height,
@@ -553,76 +571,144 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   }
 
   Widget _buildPreviewSurface() {
-    final double aspectRatio = _currentAspectRatio();
-    final BorderRadius radius = BorderRadius.circular(12);
+    return ColoredBox(
+      color: Colors.black,
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          return Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              _buildInteractivePreview(constraints),
+              IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: <Color>[
+                        Colors.black.withValues(alpha: 0.28),
+                        Colors.transparent,
+                        Colors.black.withValues(alpha: 0.42),
+                      ],
+                      stops: const <double>[0.0, 0.45, 1.0],
+                    ),
+                  ),
+                ),
+              ),
+              if (_isInitializing || (_isOpeningCamera && !_isCameraOpen))
+                _buildLoadingOverlay(),
+              if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
+                _buildOpenPreviewOverlay(),
+            ],
+          );
+        },
+      ),
+    );
+  }
 
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: Colors.black,
-          borderRadius: radius,
-          boxShadow: AppShadows.medium,
-        ),
-        child: ClipRRect(
-          borderRadius: radius,
-          child: AspectRatio(
-            aspectRatio: aspectRatio,
-            child: LayoutBuilder(
-              builder: (BuildContext context, BoxConstraints constraints) {
-                return Stack(
-                  fit: StackFit.expand,
-                  children: <Widget>[
-                    _buildInteractivePreview(constraints),
-                    if (_isInitializing || (_isOpeningCamera && !_isCameraOpen))
-                      const Center(
-                        child: CircularProgressIndicator(color: Colors.white),
-                      ),
-                    if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
-                      Positioned.fill(
-                        child: Material(
-                          color: Colors.transparent,
-                          child: InkWell(
-                            onTap: () => unawaited(_openCamera()),
-                            child: const SizedBox.expand(),
-                          ),
-                        ),
-                      ),
-                    if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
-                      const Center(
-                        child: Text(
-                          '点击“打开”开始预览',
-                          style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                  ],
-                );
-              },
+  Widget _buildLoadingOverlay() {
+    return Center(
+      child: _OverlayPanel(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2.2,
+              ),
             ),
+            const SizedBox(width: 12),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 240),
+              child: Text(
+                _statusMessage ?? '正在连接 USB 画面...',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOpenPreviewOverlay() {
+    final bool isError = _errorMessage != null;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 320),
+        child: _OverlayPanel(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Icon(
+                isError ? Icons.warning_amber_rounded : Icons.usb_rounded,
+                size: 42,
+                color: isError ? Colors.orangeAccent : AppColors.primary,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                isError ? '预览暂未就绪' : '进入单通道监看',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _errorMessage ?? '打开后画面会直接铺满窗口，双指即可放大查看细节。',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.76),
+                  fontSize: 13,
+                  height: 1.45,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 18),
+              FilledButton.icon(
+                onPressed:
+                    _isOpeningCamera ? null : () => unawaited(_openCamera()),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 18,
+                    vertical: 14,
+                  ),
+                ),
+                icon: const Icon(Icons.play_arrow_rounded),
+                label: const Text('打开预览'),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildMetric(String title, String value, bool isDark,
-      {bool wide = false}) {
+  Widget _buildMetric(String title, String value, {bool wide = false}) {
     return Container(
       constraints: BoxConstraints(
           minWidth: wide ? 240 : 132, maxWidth: wide ? 999 : 180),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: isDark
-            ? Colors.white.withValues(alpha: 0.05)
-            : Colors.black.withValues(alpha: 0.03),
+        color: Colors.white.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-            color: isDark
-                ? Colors.white.withValues(alpha: 0.06)
-                : Colors.black.withValues(alpha: 0.04)),
+          color: Colors.white.withValues(alpha: 0.08),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -632,144 +718,375 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
               style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
-                  color: isDark ? Colors.white60 : Colors.black45)),
+                  color: Colors.white60)),
           const SizedBox(height: 4),
           Text(value,
               style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: isDark ? Colors.white : Colors.black87)),
+                  color: Colors.white)),
         ],
       ),
     );
   }
 
-  Widget _buildDeviceOverview(bool isDark) {
-    return Consumer<UsbCaptureService>(
-      builder:
-          (BuildContext context, UsbCaptureService service, Widget? child) {
-        final device = service.connectedDevice;
-        if (device == null) {
-          return const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('未检测到 USB 采集卡', style: TextStyle(color: Colors.grey)),
-          );
-        }
-        final Widget header = InkWell(
-          onTap: () =>
-              setState(() => _isOverviewExpanded = !_isOverviewExpanded),
-          borderRadius: BorderRadius.circular(16),
+  Widget _buildFloatingHeader() {
+    final String resolution = _formatPreviewSize(_activePreviewSize);
+    final String subtitle =
+        resolution == '--' ? '单通道实时预览' : '$resolution · 单通道实时预览';
+    final bool isReady = _isCameraOpen && !_isRecording;
+    final bool isBusy = _isOpeningCamera || _isInitializing;
+    final Color badgeColor = _isRecording
+        ? Colors.redAccent
+        : isReady
+            ? Colors.greenAccent
+            : isBusy
+                ? AppColors.primary
+                : Colors.orangeAccent;
+    final String badgeLabel = _isRecording
+        ? 'REC'
+        : isReady
+            ? 'LIVE'
+            : isBusy
+                ? '连接中'
+                : '待打开';
+
+    return Row(
+      children: <Widget>[
+        _FloatingIconButton(
+          icon: Icons.close_rounded,
+          tooltip: '关闭预览',
+          onPressed: () => unawaited(_closePage()),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _OverlayPanel(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const Text(
+                  'USB 摄像头',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.72),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        _OverlayPanel(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               Container(
-                width: 44,
-                height: 44,
+                width: 8,
+                height: 8,
                 decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(Icons.usb, color: AppColors.primary, size: 24),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    Text(
-                      device.productName ?? 'USB 采集卡',
-                      style: TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w700,
-                        color: isDark ? Colors.white : Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _formatPreviewSize(_activePreviewSize),
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: isDark ? Colors.white70 : Colors.black54,
-                      ),
+                  color: badgeColor,
+                  shape: BoxShape.circle,
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: badgeColor.withValues(alpha: 0.32),
+                      blurRadius: 10,
                     ),
                   ],
                 ),
               ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: (_isCameraOpen ? Colors.green : Colors.orange)
-                      .withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(999),
+              const SizedBox(width: 6),
+              Text(
+                badgeLabel,
+                style: TextStyle(
+                  color: badgeColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
                 ),
-                child: Text(
-                  _isCameraOpen ? '预览中' : '待打开',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: _isCameraOpen ? Colors.green : Colors.orange,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Icon(
-                _isOverviewExpanded ? Icons.expand_less : Icons.expand_more,
-                color: isDark ? Colors.white70 : Colors.black54,
               ),
             ],
           ),
-        );
-        final Widget details = Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const SizedBox(height: 14),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: <Widget>[
-                _buildMetric(
-                  'VID',
-                  '0x${device.vid.toRadixString(16).toUpperCase().padLeft(4, '0')}',
-                  isDark,
-                ),
-                _buildMetric(
-                  'PID',
-                  '0x${device.pid.toRadixString(16).toUpperCase().padLeft(4, '0')}',
-                  isDark,
-                ),
-                _buildMetric(
-                  '当前分辨率',
-                  _formatPreviewSize(_activePreviewSize),
-                  isDark,
-                ),
-                _buildMetric(
-                  '默认分辨率',
-                  _formatPreviewSize(_preferredPreviewSize),
-                  isDark,
-                ),
-              ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFloatingInfoPanel() {
+    return Selector<UsbCaptureService, UsbCaptureDevice?>(
+      selector: (BuildContext context, UsbCaptureService service) =>
+          service.connectedDevice,
+      builder: (BuildContext context, UsbCaptureDevice? device, Widget? child) {
+        final bool isError = _errorMessage != null;
+        final Color accentColor = isError
+            ? Colors.redAccent
+            : _isRecording
+                ? Colors.orangeAccent
+                : AppColors.primary;
+        final String statusText = _errorMessage ??
+            _statusMessage ??
+            (_isCameraOpen ? '画面已就绪，可直接双指缩放查看细节。' : '等待打开预览。');
+
+        if (_isInfoPanelMinimized) {
+          return _OverlayPanel(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: InkWell(
+              onTap: () => setState(() => _isInfoPanelMinimized = false),
+              borderRadius: BorderRadius.circular(18),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(Icons.info_outline_rounded,
+                      color: accentColor, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    '展开概览',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.88),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    color: Colors.white.withValues(alpha: 0.6),
+                    size: 18,
+                  ),
+                ],
+              ),
             ),
-          ],
-        );
-        return Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: isDark ? AppColors.darkSurface : AppColors.lightSurface,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: isDark ? null : AppShadows.small,
-          ),
-          child: AnimatedSize(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                header,
-                if (_isOverviewExpanded) details,
-              ],
+          );
+        }
+
+        final String deviceName = device?.productName ?? 'USB 采集卡';
+        final String activeSize = _formatPreviewSize(_activePreviewSize);
+        final String preferredSize = _formatPreviewSize(_preferredPreviewSize);
+
+        return ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: _OverlayPanel(
+            padding: const EdgeInsets.all(16),
+            child: AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: accentColor.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.dashboard_customize_rounded,
+                          color: accentColor,
+                          size: 20,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          '消息概览',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () =>
+                            setState(() => _isInfoPanelMinimized = true),
+                        tooltip: '最小化概览',
+                        splashRadius: 18,
+                        icon: Icon(
+                          Icons.minimize_rounded,
+                          color: Colors.white.withValues(alpha: 0.72),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: accentColor.withValues(alpha: 0.16),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: accentColor.withValues(alpha: 0.22),
+                      ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Icon(
+                          isError
+                              ? Icons.priority_high_rounded
+                              : Icons.chat_bubble_outline_rounded,
+                          color: accentColor,
+                          size: 18,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            statusText,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                              height: 1.45,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: <Widget>[
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.16),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(
+                          Icons.usb_rounded,
+                          color: AppColors.primary,
+                          size: 24,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            Text(
+                              deviceName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              activeSize == '--'
+                                  ? '分辨率自动匹配中'
+                                  : '当前输出 $activeSize',
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.64),
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        decoration: BoxDecoration(
+                          color: (_isCameraOpen
+                                  ? Colors.greenAccent
+                                  : Colors.orangeAccent)
+                              .withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          _isCameraOpen ? '预览中' : '待打开',
+                          style: TextStyle(
+                            color: _isCameraOpen
+                                ? Colors.greenAccent
+                                : Colors.orangeAccent,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: <Widget>[
+                      _OverlayHintChip(
+                        icon: Icons.zoom_in_map_rounded,
+                        label: '双指缩放',
+                      ),
+                      _OverlayHintChip(
+                        icon: Icons.touch_app_rounded,
+                        label: '双击复位',
+                      ),
+                      _OverlayHintChip(
+                        icon: Icons.hd_rounded,
+                        label: activeSize == '--' ? '自动分辨率' : activeSize,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: () => setState(
+                        () => _isOverviewExpanded = !_isOverviewExpanded),
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      padding: EdgeInsets.zero,
+                    ),
+                    icon: Icon(_isOverviewExpanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded),
+                    label: Text(
+                      _isOverviewExpanded ? '收起设备详情' : '展开设备详情',
+                    ),
+                  ),
+                  if (_isOverviewExpanded) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: <Widget>[
+                        _buildMetric(
+                          'VID',
+                          device == null
+                              ? '--'
+                              : '0x${device.vid.toRadixString(16).toUpperCase().padLeft(4, '0')}',
+                        ),
+                        _buildMetric(
+                          'PID',
+                          device == null
+                              ? '--'
+                              : '0x${device.pid.toRadixString(16).toUpperCase().padLeft(4, '0')}',
+                        ),
+                        _buildMetric('当前分辨率', activeSize),
+                        _buildMetric('优选分辨率', preferredSize),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
         );
@@ -777,66 +1094,182 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     );
   }
 
-  Widget _buildControls() {
-    return SafeArea(
-      top: false,
-      minimum: const EdgeInsets.only(bottom: 8),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-        color: Colors.transparent,
-        child: Wrap(
-          spacing: 16,
-          runSpacing: 16,
-          alignment: WrapAlignment.center,
-          children: <Widget>[
-            _ActionButton(
-              icon: Icons.camera_alt,
-              label: '截屏',
-              color: Colors.blue,
-              onPressed: _isCameraOpen ? () => unawaited(_takePicture()) : null,
+  Widget _buildFloatingControls() {
+    if (_isControlPanelMinimized) {
+      return Align(
+        alignment: Alignment.bottomRight,
+        child: _OverlayPanel(
+          padding: const EdgeInsets.all(6),
+          child: IconButton(
+            onPressed: () => setState(() => _isControlPanelMinimized = false),
+            tooltip: '展开操作',
+            splashRadius: 20,
+            icon: const Icon(
+              Icons.tune_rounded,
+              color: Colors.white,
             ),
-            _ActionButton(
-              icon: _isRecording ? Icons.stop : Icons.videocam,
-              label: _isRecording ? '停止录屏' : '录屏',
-              color: _isRecording ? Colors.red : Colors.orange,
-              onPressed: (_isCameraOpen && !_isStoppingRecording)
-                  ? () => unawaited(_toggleRecording())
-                  : null,
-            ),
-          ],
+          ),
+        ),
+      );
+    }
+
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: _OverlayPanel(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.control_camera_rounded,
+                      color: Colors.white,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      '操作浮窗',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (_isRecording)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.redAccent.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: const Text(
+                        '录制中',
+                        style: TextStyle(
+                          color: Colors.redAccent,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  IconButton(
+                    onPressed: () =>
+                        setState(() => _isControlPanelMinimized = true),
+                    tooltip: '最小化操作',
+                    splashRadius: 18,
+                    icon: Icon(
+                      Icons.minimize_rounded,
+                      color: Colors.white.withValues(alpha: 0.72),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 18,
+                runSpacing: 18,
+                alignment: WrapAlignment.center,
+                children: <Widget>[
+                  _ActionButton(
+                    icon: _isCameraOpen
+                        ? Icons.camera_alt_rounded
+                        : Icons.play_arrow_rounded,
+                    label: _isCameraOpen ? '截图' : '打开预览',
+                    color: _isCameraOpen
+                        ? const Color(0xFF2997FF)
+                        : AppColors.primary,
+                    onPressed: _isCameraOpen
+                        ? () => unawaited(_takePicture())
+                        : (_isOpeningCamera
+                            ? null
+                            : () => unawaited(_openCamera())),
+                  ),
+                  _ActionButton(
+                    icon: _isRecording
+                        ? Icons.stop_circle_rounded
+                        : Icons.videocam_rounded,
+                    label: _isRecording ? '停止录制' : '录制',
+                    color: _isRecording
+                        ? Colors.redAccent
+                        : const Color(0xFFFFA726),
+                    onPressed: (_isCameraOpen && !_isStoppingRecording)
+                        ? () => unawaited(_toggleRecording())
+                        : null,
+                  ),
+                  _ActionButton(
+                    icon: Icons.refresh_rounded,
+                    label: '重连',
+                    color: const Color(0xFF14B8A6),
+                    onPressed: _isOpeningCamera
+                        ? null
+                        : () => unawaited(_openCamera()),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildNormalLayout(bool isDark) {
+  Widget _buildImmersiveLayout() {
     return Scaffold(
-      backgroundColor:
-          isDark ? AppColors.darkBackground : AppColors.lightBackground,
-      appBar: AppBar(
-        leading: IconButton(
-            icon: const Icon(Icons.close),
-            onPressed: () => unawaited(_closePage())),
-        title: const Text('USB 摄像头'),
-        backgroundColor: AppColors.primary,
-      ),
-      body: Column(
-        children: <Widget>[
-          _buildStatusBar(),
-          _buildPreviewSurface(),
-          _buildDeviceOverview(isDark),
-          const Spacer(),
-          _buildControls(),
-        ],
+      backgroundColor: Colors.black,
+      body: AnnotatedRegion<SystemUiOverlayStyle>(
+        value: SystemUiOverlayStyle.light,
+        child: SafeArea(
+          child: Stack(
+            fit: StackFit.expand,
+            children: <Widget>[
+              _buildPreviewSurface(),
+              Positioned(
+                top: 16,
+                left: 16,
+                right: 16,
+                child: _buildFloatingHeader(),
+              ),
+              Positioned(
+                top: 92,
+                left: 16,
+                right: 16,
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  child: _buildFloatingInfoPanel(),
+                ),
+              ),
+              Positioned(
+                left: 16,
+                right: 16,
+                bottom: 16,
+                child: _buildFloatingControls(),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool isDark = Theme.of(context).brightness == Brightness.dark;
-    return _buildNormalLayout(isDark);
+    return _buildImmersiveLayout();
   }
 }
 
@@ -883,23 +1316,139 @@ class _ActionButtonState extends State<_ActionButton> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        Material(
-          color: enabled ? widget.color : Colors.grey,
-          borderRadius: BorderRadius.circular(12),
-          child: InkWell(
-            onTap: enabled ? () => unawaited(_handleTap()) : null,
-            borderRadius: BorderRadius.circular(12),
-            child: SizedBox(
-                width: 56,
-                height: 56,
-                child: Icon(widget.icon, color: Colors.white, size: 28)),
+        AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          width: 66,
+          height: 66,
+          decoration: BoxDecoration(
+            color: enabled
+                ? widget.color.withValues(alpha: 0.94)
+                : Colors.white.withValues(alpha: 0.18),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: enabled ? 0.16 : 0.08),
+            ),
+            boxShadow: enabled
+                ? <BoxShadow>[
+                    BoxShadow(
+                      color: widget.color.withValues(alpha: 0.2),
+                      blurRadius: 18,
+                      offset: const Offset(0, 8),
+                    ),
+                  ]
+                : null,
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: enabled ? () => unawaited(_handleTap()) : null,
+              borderRadius: BorderRadius.circular(18),
+              child: Icon(widget.icon, color: Colors.white, size: 30),
+            ),
           ),
         ),
-        const SizedBox(height: 4),
+        const SizedBox(height: 8),
         Text(widget.label,
             style: TextStyle(
-                fontSize: 11, color: enabled ? Colors.white : Colors.grey)),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: enabled ? Colors.white : Colors.white54,
+            )),
       ],
+    );
+  }
+}
+
+class _OverlayPanel extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  const _OverlayPanel({
+    required this.child,
+    this.padding = const EdgeInsets.all(12),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xB8141A1F),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.28),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: padding,
+        child: child,
+      ),
+    );
+  }
+}
+
+class _FloatingIconButton extends StatelessWidget {
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  const _FloatingIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _OverlayPanel(
+      padding: const EdgeInsets.all(6),
+      child: IconButton(
+        onPressed: onPressed,
+        tooltip: tooltip,
+        splashRadius: 20,
+        icon: Icon(icon, color: Colors.white),
+      ),
+    );
+  }
+}
+
+class _OverlayHintChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+
+  const _OverlayHintChip({
+    required this.icon,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(icon, size: 15, color: Colors.white70),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

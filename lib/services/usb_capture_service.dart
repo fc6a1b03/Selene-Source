@@ -175,12 +175,17 @@ class UsbCaptureService extends ChangeNotifier {
   void _handleDeviceDetached() {
     debugPrint('UsbCaptureService: 采集卡拔出');
 
+    final hadDevice = _isCaptureCardConnected;
     _connectedDevice = null;
     _isCaptureCardConnected = false;
     _devicePath = null;
 
-    debugPrint('UsbCaptureService: 采集卡已断开');
-    notifyListeners();
+    debugPrint('UsbCaptureService: 采集卡已断开，清理完成');
+
+    // 只有之前连接过设备时才通知UI更新
+    if (hadDevice) {
+      notifyListeners();
+    }
   }
 
   // 注意：检测逻辑已简化，直接信任原生层结果

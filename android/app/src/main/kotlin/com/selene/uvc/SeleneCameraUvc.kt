@@ -139,16 +139,23 @@ class SeleneCameraUvc(
                 request.previewWidth = width
                 request.previewHeight = height
             }
-            uvcCamera?.setPreviewSize(
-                previewSize.width,
-                previewSize.height,
-                minFps,
-                maxFps,
-                UVCCamera.FRAME_FORMAT_YUYV,
-                UVCCamera.DEFAULT_BANDWIDTH,
-            )
+            try {
+                uvcCamera?.setPreviewSize(
+                    previewSize.width,
+                    previewSize.height,
+                    minFps,
+                    maxFps,
+                    UVCCamera.FRAME_FORMAT_YUYV,
+                    UVCCamera.DEFAULT_BANDWIDTH,
+                )
+            } catch (e2: Exception) {
+                closeCamera()
+                postStateEvent(ICameraStateCallBack.State.ERROR, "set preview size failed: ${e2.localizedMessage}")
+                return
+            }
         }
 
+        // 在 NORMAL 模式下设置帧回调
         if (!isNeedGLESRender || request.isRawPreviewData || request.isCaptureRawImage) {
             uvcCamera?.setFrameCallback(frameCallback, UVCCamera.PIXEL_FORMAT_YUV420SP)
         }
@@ -161,8 +168,14 @@ class SeleneCameraUvc(
             }
             is SurfaceView -> uvcCamera?.setPreviewDisplay(cameraView.holder)
             is TextureView -> {
-                cameraView.surfaceTexture?.setDefaultBufferSize(previewSize.width, previewSize.height)
-                uvcCamera?.setPreviewTexture(cameraView.surfaceTexture)
+                val surfaceTexture = cameraView.surfaceTexture
+                if (surfaceTexture == null) {
+                    closeCamera()
+                    postStateEvent(ICameraStateCallBack.State.ERROR, "TextureView surfaceTexture is null")
+                    return
+                }
+                surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
+                uvcCamera?.setPreviewTexture(surfaceTexture)
             }
             else -> throw IllegalStateException("Only support Surface/SurfaceTexture/SurfaceView/TextureView")
         }
@@ -173,7 +186,6 @@ class SeleneCameraUvc(
         uvcCamera?.updateCameraParams()
         isPreviewed = true
         postStateEvent(ICameraStateCallBack.State.OPENED)
-        Logger.i(TAG, "start preview size=$previewSize")
     }
 
     override fun closeCameraInternal() {
