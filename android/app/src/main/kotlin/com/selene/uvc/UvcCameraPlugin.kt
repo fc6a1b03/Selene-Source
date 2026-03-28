@@ -45,7 +45,8 @@ class UvcCameraPlugin(
             "openUVCCamera" -> view.openCamera(result)
             "closeCamera" -> view.closeCamera(result)
             "takePicture" -> view.takePicture(result)
-            "captureVideo" -> view.captureVideo(result)
+            "startVideoRecording" -> view.startVideoRecording(result)
+            "stopVideoRecording" -> view.stopVideoRecording(result)
             "getAllPreviewSizes" -> result.success(view.getAllPreviewSizes())
             "getCurrentCameraRequestParameters" -> result.success(view.getCurrentCameraRequestParameters())
             "updateResolution" -> {

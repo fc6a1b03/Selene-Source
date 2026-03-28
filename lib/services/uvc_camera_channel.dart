@@ -70,6 +70,9 @@ class UVCCameraController {
   void Function(UVCCameraState state)? cameraStateCallback;
   void Function(String path)? clickTakePictureButtonCallback;
   void Function(String message)? msgCallback;
+  VoidCallback? previewTapCallback;
+  void Function(String path)? videoRecordingCompletedCallback;
+  void Function(String message)? videoRecordingErrorCallback;
 
   UVCCameraState get cameraState => _cameraState;
 
@@ -103,6 +106,21 @@ class UVCCameraController {
         break;
       case 'CameraState':
         _setCameraState(call.arguments?.toString() ?? '');
+        break;
+      case 'previewTapped':
+        previewTapCallback?.call();
+        break;
+      case 'videoRecordingCompleted':
+        final String? path = call.arguments as String?;
+        if (path != null) {
+          videoRecordingCompletedCallback?.call(path);
+        }
+        break;
+      case 'videoRecordingError':
+        final String? message = call.arguments as String?;
+        if (message != null && message.isNotEmpty) {
+          videoRecordingErrorCallback?.call(message);
+        }
         break;
       default:
         break;
@@ -142,8 +160,12 @@ class UVCCameraController {
     return _channel.invokeMethod<String>('takePicture');
   }
 
-  Future<String?> captureVideo() async {
-    return _channel.invokeMethod<String>('captureVideo');
+  Future<void> startVideoRecording() async {
+    await _channel.invokeMethod<void>('startVideoRecording');
+  }
+
+  Future<void> stopVideoRecording() async {
+    await _channel.invokeMethod<void>('stopVideoRecording');
   }
 
   Future<void> setZoom(int zoom) async {

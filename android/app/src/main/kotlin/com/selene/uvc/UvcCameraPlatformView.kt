@@ -23,6 +23,7 @@ import com.jiangdg.uvc.IButtonCallback
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.platform.PlatformView
 import org.moontechlab.selene.BuildConfig
+import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -51,6 +52,7 @@ class UvcCameraPlatformView(
     private var latestPreviewWidth = 0
     private var latestPreviewHeight = 0
     private var hasRenderedFirstFrame = false
+    private var pendingRecordingPath: String? = null
     private var displayScale = 1f
     private var displayTranslationX = 0f
     private var displayTranslationY = 0f
@@ -82,6 +84,7 @@ class UvcCameraPlatformView(
         latestPreviewWidth = 0
         latestPreviewHeight = 0
         hasRenderedFirstFrame = false
+        pendingRecordingPath = null
         rootView.removeAllViews()
     }
 
@@ -135,7 +138,7 @@ class UvcCameraPlatformView(
         }, null)
     }
 
-    fun captureVideo(result: MethodChannel.Result) {
+    fun startVideoRecording(result: MethodChannel.Result) {
         val camera = getCurrentCamera()
         if (camera == null || !camera.isCameraOpened()) {
             result.error("NOT_OPENED", "摄像头未打开", null)
@@ -143,32 +146,97 @@ class UvcCameraPlatformView(
         }
 
         if (isCapturingVideo) {
-            camera.captureVideoStop()
-            isCapturingVideo = false
-            result.success("")
+            result.error("ALREADY_RECORDING", "录像已在进行中", null)
             return
         }
 
-        camera.captureVideoStart(object : ICaptureCallBack {
+        var startAcknowledged = false
+        try {
+            camera.captureVideoStart(object : ICaptureCallBack {
             override fun onBegin() {
                 isCapturingVideo = true
+                pendingRecordingPath = resolveCurrentRecordingPath(camera)
+                startAcknowledged = true
                 callFlutter("开始录屏")
+                result.success(null)
             }
 
             override fun onComplete(path: String?) {
                 isCapturingVideo = false
-                if (path.isNullOrEmpty()) {
-                    result.error("VIDEO_FAILED", "录屏失败", null)
+                val completedPath = path ?: pendingRecordingPath
+                pendingRecordingPath = null
+                if (!startAcknowledged) {
+                    if (completedPath.isNullOrEmpty()) {
+                        result.error("VIDEO_FAILED", "录屏失败", null)
+                    } else {
+                        result.success(null)
+                        channel.invokeMethod("videoRecordingCompleted", completedPath)
+                    }
                     return
                 }
-                result.success(path)
+                if (completedPath.isNullOrEmpty()) {
+                    channel.invokeMethod("videoRecordingError", "录屏失败")
+                    return
+                }
+                channel.invokeMethod("videoRecordingCompleted", completedPath)
             }
 
             override fun onError(error: String?) {
                 isCapturingVideo = false
-                result.error("VIDEO_FAILED", error, null)
+                val fallbackPath = pendingRecordingPath
+                pendingRecordingPath = null
+                if (isMediaStoreMutationError(error) && !fallbackPath.isNullOrEmpty()) {
+                    val file = File(fallbackPath)
+                    if (file.exists() && file.length() > 0L) {
+                        channel.invokeMethod("videoRecordingCompleted", fallbackPath)
+                        return
+                    }
+                }
+                if (!startAcknowledged) {
+                    result.error("VIDEO_FAILED", error ?: "录屏失败", null)
+                    return
+                }
+                channel.invokeMethod("videoRecordingError", error ?: "录屏失败")
+                }
+            }, null, 0L)
+        } catch (e: Exception) {
+            isCapturingVideo = false
+            result.error("VIDEO_FAILED", e.message ?: "录屏失败", null)
+        }
+    }
+
+    fun stopVideoRecording(result: MethodChannel.Result) {
+        val camera = getCurrentCamera()
+        if (camera == null || !camera.isCameraOpened()) {
+            result.error("NOT_OPENED", "摄像头未打开", null)
+            return
+        }
+
+        if (!isCapturingVideo) {
+            result.success(null)
+            return
+        }
+
+        try {
+            if (pendingRecordingPath.isNullOrEmpty()) {
+                pendingRecordingPath = resolveCurrentRecordingPath(camera)
             }
-        }, null, 0L)
+            camera.captureVideoStop()
+            result.success(null)
+        } catch (e: Exception) {
+            val fallbackPath = pendingRecordingPath
+            pendingRecordingPath = null
+            if (isMediaStoreMutationError(e.message) && !fallbackPath.isNullOrEmpty()) {
+                val file = File(fallbackPath)
+                if (file.exists() && file.length() > 0L) {
+                    isCapturingVideo = false
+                    channel.invokeMethod("videoRecordingCompleted", fallbackPath)
+                    result.success(null)
+                    return
+                }
+            }
+            result.error("VIDEO_FAILED", e.message ?: "停止录屏失败", null)
+        }
     }
 
     fun getAllPreviewSizes(): String? {
@@ -456,6 +524,25 @@ class UvcCameraPlatformView(
         applyPreviewTransform()
     }
 
+    private fun resolveCurrentRecordingPath(camera: MultiCameraClient.ICamera): String? {
+        return try {
+            val muxerField = MultiCameraClient.ICamera::class.java.getDeclaredField("mMediaMuxer")
+            muxerField.isAccessible = true
+            val muxer = muxerField.get(camera) ?: return null
+            val pathField = muxer.javaClass.getDeclaredField("path")
+            pathField.isAccessible = true
+            pathField.get(muxer) as? String
+        } catch (e: Exception) {
+            Logger.w(TAG, "read recording path failed: ${e.message}")
+            null
+        }
+    }
+
+    private fun isMediaStoreMutationError(message: String?): Boolean {
+        val normalized = message?.lowercase() ?: return false
+        return normalized.contains("mutation of _data is not allowed")
+    }
+
     private inner class PreviewScaleListener : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
             val nextScale = (displayScale * detector.scaleFactor).coerceIn(1f, 4f)
@@ -469,6 +556,11 @@ class UvcCameraPlatformView(
     }
 
     private inner class PreviewGestureListener : GestureDetector.SimpleOnGestureListener() {
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            channel.invokeMethod("previewTapped", null)
+            return true
+        }
+
         override fun onDoubleTap(e: MotionEvent): Boolean {
             resetPreviewTransformState()
             return true
@@ -476,10 +568,10 @@ class UvcCameraPlatformView(
     }
 
     private fun getCameraRequest(): com.jiangdg.ausbc.camera.bean.CameraRequest {
-        // 先用更保守的 640x480 建立首帧预览，待画面稳定后再由上层决定是否切换更高分辨率。
+        // 先用更稳的 720p 建立首帧预览，待画面稳定后再自动切换到设备支持的最佳分辨率。
         return com.jiangdg.ausbc.camera.bean.CameraRequest.Builder()
-            .setPreviewWidth(640)
-            .setPreviewHeight(480)
+            .setPreviewWidth(1280)
+            .setPreviewHeight(720)
             .setRenderMode(com.jiangdg.ausbc.camera.bean.CameraRequest.RenderMode.OPENGL)
             .setDefaultRotateType(com.jiangdg.ausbc.render.env.RotateType.ANGLE_0)
             .setAudioSource(com.jiangdg.ausbc.camera.bean.CameraRequest.AudioSource.SOURCE_SYS_MIC)
@@ -491,9 +583,9 @@ class UvcCameraPlatformView(
 
     private fun buildCameraParams(args: Any?): Map<String, Any> {
         val defaults = mutableMapOf<String, Any>(
-            // 先用更稳的预览分辨率拿到首帧，避免部分采集卡在首次打开时直接冲 1080p 导致黑屏。
-            "preferredWidth" to 640,
-            "preferredHeight" to 480,
+            // 优先使用设备声明的目标分辨率；若失败，再由底层回退到更稳的档位。
+            "preferredWidth" to BuildConfig.UVC_PREFERRED_WIDTH,
+            "preferredHeight" to BuildConfig.UVC_PREFERRED_HEIGHT,
             "minFps" to BuildConfig.UVC_MIN_FPS,
             "maxFps" to BuildConfig.UVC_MAX_FPS,
             "frameFormat" to BuildConfig.UVC_FRAME_FORMAT,
