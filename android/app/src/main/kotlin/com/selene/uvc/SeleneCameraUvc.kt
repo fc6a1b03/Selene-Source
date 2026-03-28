@@ -4,6 +4,8 @@ import android.content.ContentValues
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.hardware.usb.UsbDevice
+import android.os.Build
+import android.os.Environment
 import android.media.MediaScannerConnection
 import android.provider.MediaStore
 import android.view.Surface
@@ -250,7 +252,7 @@ class SeleneCameraUvc(
 
     override fun captureImageInternal(savePath: String?, callback: ICaptureCallBack) {
         mSaveImageExecutor.submit {
-            if (!CameraUtils.hasStoragePermission(ctx)) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q && !CameraUtils.hasStoragePermission(ctx)) {
                 mMainHandler.post { callback.onError("have no storage permission") }
                 return@submit
             }
@@ -264,9 +266,66 @@ class SeleneCameraUvc(
                 return@submit
             }
             mMainHandler.post { callback.onBegin() }
-            val date = mDateFormat.format(System.currentTimeMillis())
+            val capturedAt = System.currentTimeMillis()
+            val date = mDateFormat.format(capturedAt)
             val title = savePath ?: "IMG_UVC_$date"
             val displayName = savePath ?: "$title.jpg"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val tempFile = File(ctx.cacheDir, displayName)
+                val ret = MediaUtils.saveYuv2Jpeg(
+                    tempFile.absolutePath,
+                    data,
+                    mCameraRequest!!.previewWidth,
+                    mCameraRequest!!.previewHeight,
+                )
+                if (!ret) {
+                    tempFile.delete()
+                    mMainHandler.post { callback.onError("save yuv to jpeg failed.") }
+                    return@submit
+                }
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.ImageColumns.TITLE, title)
+                        put(MediaStore.Images.ImageColumns.DISPLAY_NAME, displayName)
+                        put(MediaStore.Images.ImageColumns.MIME_TYPE, "image/jpeg")
+                        put(MediaStore.Images.ImageColumns.DATE_TAKEN, capturedAt)
+                        put(
+                            MediaStore.Images.ImageColumns.RELATIVE_PATH,
+                            Environment.DIRECTORY_DCIM + File.separator + "Camera",
+                        )
+                        put(MediaStore.Images.ImageColumns.IS_PENDING, 1)
+                    }
+                    val uri = ctx.contentResolver?.insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        values,
+                    )
+                    if (uri == null) {
+                        tempFile.delete()
+                        mMainHandler.post { callback.onError("insert image to MediaStore failed.") }
+                        return@submit
+                    }
+                    ctx.contentResolver?.openOutputStream(uri)?.use { output ->
+                        tempFile.inputStream().use { input ->
+                            input.copyTo(output)
+                        }
+                    } ?: run {
+                        tempFile.delete()
+                        mMainHandler.post { callback.onError("open MediaStore output stream failed.") }
+                        return@submit
+                    }
+                    val readyValues = ContentValues().apply {
+                        put(MediaStore.Images.ImageColumns.IS_PENDING, 0)
+                    }
+                    ctx.contentResolver?.update(uri, readyValues, null, null)
+                    tempFile.delete()
+                    mMainHandler.post { callback.onComplete(uri.toString()) }
+                } catch (e: Exception) {
+                    tempFile.delete()
+                    mMainHandler.post { callback.onError(e.localizedMessage ?: "save image failed.") }
+                }
+                return@submit
+            }
+
             val path = savePath ?: "$mCameraDir/$displayName"
             val ret = MediaUtils.saveYuv2Jpeg(path, data, mCameraRequest!!.previewWidth, mCameraRequest!!.previewHeight)
             if (!ret) {
@@ -278,7 +337,7 @@ class SeleneCameraUvc(
                 put(MediaStore.Images.ImageColumns.TITLE, title)
                 put(MediaStore.Images.ImageColumns.DISPLAY_NAME, displayName)
                 put(MediaStore.Images.ImageColumns.DATA, path)
-                put(MediaStore.Images.ImageColumns.DATE_TAKEN, date)
+                put(MediaStore.Images.ImageColumns.DATE_TAKEN, capturedAt)
             }
             ctx.contentResolver?.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
             MediaScannerConnection.scanFile(ctx, arrayOf(path), null, null)

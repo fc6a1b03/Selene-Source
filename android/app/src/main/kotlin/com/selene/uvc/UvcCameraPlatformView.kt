@@ -1,9 +1,14 @@
 package com.selene.uvc
 
 import android.app.Activity
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.SurfaceTexture
 import android.hardware.usb.UsbDevice
+import android.media.MediaScannerConnection
+import android.os.Environment
+import android.os.Build
+import android.provider.MediaStore
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -24,8 +29,11 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.platform.PlatformView
 import org.moontechlab.selene.BuildConfig
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.Locale
 
 class UvcCameraPlatformView(
     private val activity: Activity,
@@ -53,6 +61,7 @@ class UvcCameraPlatformView(
     private var latestPreviewHeight = 0
     private var hasRenderedFirstFrame = false
     private var pendingRecordingPath: String? = null
+    private val mediaPublishExecutor = Executors.newSingleThreadExecutor()
     private var displayScale = 1f
     private var displayTranslationX = 0f
     private var displayTranslationY = 0f
@@ -85,6 +94,7 @@ class UvcCameraPlatformView(
         latestPreviewHeight = 0
         hasRenderedFirstFrame = false
         pendingRecordingPath = null
+        mediaPublishExecutor.shutdownNow()
         rootView.removeAllViews()
     }
 
@@ -150,16 +160,17 @@ class UvcCameraPlatformView(
             return
         }
 
+        val recordingBasePath = buildRecordingOutputBasePath()
+        pendingRecordingPath = recordingBasePath?.let { "$it.mp4" }
         var startAcknowledged = false
         try {
             camera.captureVideoStart(object : ICaptureCallBack {
-            override fun onBegin() {
-                isCapturingVideo = true
-                pendingRecordingPath = resolveCurrentRecordingPath(camera)
-                startAcknowledged = true
-                callFlutter("开始录屏")
-                result.success(null)
-            }
+                override fun onBegin() {
+                    isCapturingVideo = true
+                    startAcknowledged = true
+                    callFlutter("开始录屏")
+                    result.success(null)
+                }
 
             override fun onComplete(path: String?) {
                 isCapturingVideo = false
@@ -170,7 +181,7 @@ class UvcCameraPlatformView(
                         result.error("VIDEO_FAILED", "录屏失败", null)
                     } else {
                         result.success(null)
-                        channel.invokeMethod("videoRecordingCompleted", completedPath)
+                        publishRecordingResult(completedPath)
                     }
                     return
                 }
@@ -178,7 +189,7 @@ class UvcCameraPlatformView(
                     channel.invokeMethod("videoRecordingError", "录屏失败")
                     return
                 }
-                channel.invokeMethod("videoRecordingCompleted", completedPath)
+                publishRecordingResult(completedPath)
             }
 
             override fun onError(error: String?) {
@@ -188,7 +199,7 @@ class UvcCameraPlatformView(
                 if (isMediaStoreMutationError(error) && !fallbackPath.isNullOrEmpty()) {
                     val file = File(fallbackPath)
                     if (file.exists() && file.length() > 0L) {
-                        channel.invokeMethod("videoRecordingCompleted", fallbackPath)
+                        publishRecordingResult(fallbackPath)
                         return
                     }
                 }
@@ -198,9 +209,10 @@ class UvcCameraPlatformView(
                 }
                 channel.invokeMethod("videoRecordingError", error ?: "录屏失败")
                 }
-            }, null, 0L)
+            }, recordingBasePath, 0L)
         } catch (e: Exception) {
             isCapturingVideo = false
+            pendingRecordingPath = null
             result.error("VIDEO_FAILED", e.message ?: "录屏失败", null)
         }
     }
@@ -218,9 +230,6 @@ class UvcCameraPlatformView(
         }
 
         try {
-            if (pendingRecordingPath.isNullOrEmpty()) {
-                pendingRecordingPath = resolveCurrentRecordingPath(camera)
-            }
             camera.captureVideoStop()
             result.success(null)
         } catch (e: Exception) {
@@ -230,7 +239,7 @@ class UvcCameraPlatformView(
                 val file = File(fallbackPath)
                 if (file.exists() && file.length() > 0L) {
                     isCapturingVideo = false
-                    channel.invokeMethod("videoRecordingCompleted", fallbackPath)
+                    publishRecordingResult(fallbackPath)
                     result.success(null)
                     return
                 }
@@ -524,23 +533,85 @@ class UvcCameraPlatformView(
         applyPreviewTransform()
     }
 
-    private fun resolveCurrentRecordingPath(camera: MultiCameraClient.ICamera): String? {
+    private fun isMediaStoreMutationError(message: String?): Boolean {
+        val normalized = message?.lowercase() ?: return false
+        return normalized.contains("mutation of _data is not allowed")
+    }
+
+    private fun publishRecordingResult(sourcePath: String) {
+        mediaPublishExecutor.execute {
+            val finalPath = publishVideoToMediaStore(sourcePath) ?: sourcePath
+            activity.runOnUiThread {
+                channel.invokeMethod("videoRecordingCompleted", finalPath)
+            }
+        }
+    }
+
+    private fun publishVideoToMediaStore(sourcePath: String): String? {
+        val sourceFile = File(sourcePath)
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) {
+            return null
+        }
+
         return try {
-            val muxerField = MultiCameraClient.ICamera::class.java.getDeclaredField("mMediaMuxer")
-            muxerField.isAccessible = true
-            val muxer = muxerField.get(camera) ?: return null
-            val pathField = muxer.javaClass.getDeclaredField("path")
-            pathField.isAccessible = true
-            pathField.get(muxer) as? String
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.DISPLAY_NAME, sourceFile.name)
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                    put(
+                        MediaStore.Video.Media.RELATIVE_PATH,
+                        Environment.DIRECTORY_MOVIES + File.separator + "Selene",
+                    )
+                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                }
+
+                val resolver = activity.contentResolver
+                val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: return null
+
+                try {
+                    resolver.openOutputStream(uri)?.use { output ->
+                        sourceFile.inputStream().use { input ->
+                            input.copyTo(output)
+                        }
+                    } ?: return null
+
+                    val readyValues = ContentValues().apply {
+                        put(MediaStore.Video.Media.IS_PENDING, 0)
+                    }
+                    resolver.update(uri, readyValues, null, null)
+                    sourceFile.delete()
+                    uri.toString()
+                } catch (e: Exception) {
+                    resolver.delete(uri, null, null)
+                    throw e
+                }
+            } else {
+                MediaScannerConnection.scanFile(
+                    activity,
+                    arrayOf(sourceFile.absolutePath),
+                    arrayOf("video/mp4"),
+                    null,
+                )
+                sourceFile.absolutePath
+            }
         } catch (e: Exception) {
-            Logger.w(TAG, "read recording path failed: ${e.message}")
+            Logger.e(TAG, "publish video to media store failed", e)
             null
         }
     }
 
-    private fun isMediaStoreMutationError(message: String?): Boolean {
-        val normalized = message?.lowercase() ?: return false
-        return normalized.contains("mutation of _data is not allowed")
+    private fun buildRecordingOutputBasePath(): String? {
+        val moviesDir = activity.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+            ?: activity.filesDir
+        val targetDir = File(moviesDir, "selene_usb_capture")
+        if (!targetDir.exists() && !targetDir.mkdirs()) {
+            Logger.w(TAG, "create recording directory failed: ${targetDir.absolutePath}")
+            return null
+        }
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            .format(System.currentTimeMillis())
+        return File(targetDir, "VID_UVC_$timestamp").absolutePath
     }
 
     private inner class PreviewScaleListener : ScaleGestureDetector.SimpleOnScaleGestureListener() {

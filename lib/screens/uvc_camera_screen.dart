@@ -18,11 +18,9 @@ class UVCCameraScreen extends StatefulWidget {
 }
 
 class _UVCCameraScreenState extends State<UVCCameraScreen> {
-  final GlobalKey _previewKey = GlobalKey();
-
   UVCCameraController? _cameraController;
   StreamSubscription<UsbCaptureEvent>? _usbEventSubscription;
-  Timer? _chromeHideTimer;
+  int _previewRevision = 0;
 
   bool _isInitializing = true;
   bool _isOpeningCamera = false;
@@ -61,7 +59,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     debugPrint('UVCCameraScreen: disposing...');
     unawaited(_exitImmersiveMode());
     unawaited(_restoreSystemOrientation());
-    _chromeHideTimer?.cancel();
     _detachUsbDisconnectListener();
     _releaseCameraResources();
     // 清理状态变量
@@ -141,7 +138,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   }
 
   void _resetScreenState() {
-    _chromeHideTimer?.cancel();
     _activePreviewSize = null;
     _preferredPreviewSize = null;
     _didApplyPreferredResolution = false;
@@ -159,11 +155,17 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     _errorMessage = null;
   }
 
-  void _scheduleChromeAutoHide() {
-    _chromeHideTimer?.cancel();
+  Future<void> _waitForNextFrame() {
+    final Completer<void> completer = Completer<void>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+    });
+    return completer.future;
   }
 
-  void _showOverlays({bool restartTimer = true, bool force = false}) {
+  void _showOverlays({bool force = false}) {
     if (!mounted) {
       return;
     }
@@ -172,9 +174,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     }
     if (!_areOverlaysVisible) {
       setState(() => _areOverlaysVisible = true);
-    }
-    if (restartTimer) {
-      _scheduleChromeAutoHide();
     }
   }
 
@@ -186,7 +185,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
       });
       return;
     }
-    _showOverlays(restartTimer: false);
+    _showOverlays();
   }
 
   void _toggleFloatingWindowsVisibility() {
@@ -321,6 +320,40 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
         });
       }
     }
+  }
+
+  Future<void> _reconnectCamera() async {
+    if (_isOpeningCamera) {
+      return;
+    }
+    setState(() {
+      _isOpeningCamera = true;
+      _isInitializing = true;
+      _errorMessage = null;
+      _statusMessage = '正在重建 USB 预览...';
+    });
+
+    await _releaseCameraResourcesAsync();
+    if (!mounted) {
+      return;
+    }
+
+    _cameraController = UVCCameraController();
+    _setupCallbacks();
+    setState(() {
+      _previewRevision += 1;
+      _isCameraOpen = false;
+      _isRecording = false;
+      _isStoppingRecording = false;
+      _isOpeningCamera = false;
+      _isInitializing = true;
+    });
+
+    await _waitForNextFrame();
+    if (!mounted) {
+      return;
+    }
+    await _initializeCamera(autoOpen: true);
   }
 
   Future<bool> _waitCameraReady({required Duration timeout}) async {
@@ -495,11 +528,10 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     });
     if (applyPreferredResolution && active != null) {
       _updateStatusMessage(
-        '已切换至设备最佳分辨率 ${_formatPreviewSize(active)}',
+        '已切换至设备最佳分辨率',
         minInterval: Duration.zero,
       );
       _showOverlays();
-      _scheduleChromeAutoHide();
     }
   }
 
@@ -541,6 +573,35 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     final int height = size?.height ?? 0;
     if (width <= 0 || height <= 0) return '--';
     return '${width}x$height';
+  }
+
+  String _buildResolutionStatusText(
+      PreviewSize? active, PreviewSize? preferred) {
+    final String activeText = _formatPreviewSize(active);
+    if (activeText == '--') {
+      return '分辨率自动匹配中';
+    }
+    final String preferredText = _formatPreviewSize(preferred);
+    if (preferredText != '--' && activeText != preferredText) {
+      return '当前输出 $activeText · 优选 $preferredText';
+    }
+    return '当前输出 $activeText';
+  }
+
+  String _normalizeDeviceName(UsbCaptureDevice? device) {
+    final String rawName = (device?.productName ?? '').trim();
+    if (rawName.isEmpty) {
+      return 'USB 采集卡';
+    }
+    final String lower = rawName.toLowerCase();
+    if (lower == 'usb video' ||
+        lower == 'usb camera' ||
+        lower == 'camera' ||
+        lower == 'uvc camera' ||
+        lower == 'usb 2.0 camera') {
+      return 'USB 采集卡';
+    }
+    return rawName;
   }
 
   void _updateStatusMessage(String message,
@@ -656,7 +717,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
       return const SizedBox.shrink();
     }
     return KeyedSubtree(
-      key: _previewKey,
+      key: ValueKey<int>(_previewRevision),
       child: UVCCameraView(
         cameraController: _cameraController!,
         width: width,
@@ -970,7 +1031,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
             _statusMessage ??
             (_isCameraOpen ? '画面已就绪，可直接双指缩放查看细节。' : '等待打开预览。');
 
-        final String deviceName = device?.productName ?? 'USB 采集卡';
+        final String deviceName = _normalizeDeviceName(device);
         final String activeSize = _formatPreviewSize(_activePreviewSize);
         final String preferredSize = _formatPreviewSize(_preferredPreviewSize);
 
@@ -1096,11 +1157,10 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
                               ),
                               const SizedBox(height: 4),
                               Text(
-                                activeSize == '--'
-                                    ? '分辨率自动匹配中'
-                                    : _didApplyPreferredResolution
-                                        ? '自适应输出 $activeSize'
-                                        : '当前输出 $activeSize',
+                                _buildResolutionStatusText(
+                                  _activePreviewSize,
+                                  _preferredPreviewSize,
+                                ),
                                 style: TextStyle(
                                   color: Colors.white.withValues(alpha: 0.64),
                                   fontSize: 12,
@@ -1360,7 +1420,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
                         ? null
                         : () {
                             _showOverlays();
-                            unawaited(_openCamera());
+                            unawaited(_reconnectCamera());
                           },
                   ),
                 ],
