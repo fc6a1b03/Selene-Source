@@ -3,19 +3,19 @@ import java.io.FileInputStream
 import java.util.Properties
 
 plugins {
-    id("kotlin-android")
-    id("com.android.application")
+    alias(libs.plugins.kotlinAndroid)
+    alias(libs.plugins.androidApplication)
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
-    namespace = "org.moontechlab.selene"
-    compileSdk = 36
-    ndkVersion = "29.0.14206865"
+    namespace = libs.versions.appNamespace.get()
+    ndkVersion = libs.versions.ndkVersion.get()
+    compileSdk = libs.versions.compileSdk.get().toInt()
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.toVersion(libs.versions.java.get())
+        targetCompatibility = JavaVersion.toVersion(libs.versions.java.get())
     }
 
     subprojects {
@@ -36,16 +36,30 @@ android {
 
     kotlin {
         compilerOptions {
-            jvmTarget = JvmTarget.JVM_17
+            jvmTarget = JvmTarget.fromTarget(libs.versions.jvmTarget.get())
         }
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
-        applicationId = "org.moontechlab.selene"
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        applicationId = libs.versions.appId.get()
+        minSdk = libs.versions.minSdk.get().toInt()
+        targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        buildConfigField("int", "UVC_MIN_FPS", libs.versions.uvcMinFps.get())
+        buildConfigField("int", "UVC_MAX_FPS", libs.versions.uvcMaxFps.get())
+        buildConfigField("int", "UVC_FRAME_FORMAT", libs.versions.uvcFrameFormat.get())
+        buildConfigField("int", "UVC_PREFERRED_WIDTH", libs.versions.uvcPreferredWidth.get())
+        buildConfigField("int", "UVC_PREFERRED_HEIGHT", libs.versions.uvcPreferredHeight.get())
+        buildConfigField(
+            "float",
+            "UVC_BANDWIDTH_FACTOR",
+            "${libs.versions.uvcBandwidthFactor.get()}f",
+        )
     }
     val keystorePropertiesFile = rootProject.file("key.properties")
     val hasSigningConfig = keystorePropertiesFile.exists()
@@ -98,6 +112,13 @@ android {
             isMinifyEnabled = false
         }
     }
+}
+
+dependencies {
+    implementation(libs.google.gson)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.android.usb.camera.libuvc)
+    implementation(libs.android.usb.camera.libusbc)
 }
 
 flutter {

@@ -1,0 +1,31 @@
+[versions]
+flutterPluginLoader = "1.0.0"
+androidGradlePlugin = "8.13.2"
+kotlin = "2.3.20"
+compileSdk = "37"
+minSdk = "30"
+targetSdk = "37"
+ndkVersion = "29.0.14206865"
+java = "17"
+jvmTarget = "17"
+appNamespace = "org.moontechlab.selene"
+appId = "org.moontechlab.selene"
+gson = "2.13.2"
+appcompat = "1.7.1"
+android-usb-camera = "3.3.6"
+uvcPreferredWidth = "1920"
+uvcPreferredHeight = "1080"
+uvcMinFps = "10"
+uvcMaxFps = "60"
+uvcFrameFormat = "1"
+uvcBandwidthFactor = "1.0"
+
+[libraries]
+google-gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+android-usb-camera-libuvc = { group = "com.github.chenyeju295.AndroidUSBCamera", name = "libuvc", version.ref = "android-usb-camera" }
+android-usb-camera-libusbc = { group = "com.github.chenyeju295.AndroidUSBCamera", name = "libausbc", version.ref = "android-usb-camera" }
+
+[plugins]
+kotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+androidApplication = { id = "com.android.application", version.ref = "androidGradlePlugin" }

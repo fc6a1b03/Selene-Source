@@ -1,187 +1,241 @@
-import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// UVCCamera 平台通道
-///
-/// 与 Android 原生层通信，控制 USB 摄像头
-class UVCCameraChannel {
-  static const MethodChannel _channel = MethodChannel(
-    'selene.uvc_camera/channel',
-  );
-  static const EventChannel _eventChannel = EventChannel(
-    'selene.uvc_camera/events',
-  );
+class PreviewSize {
+  final int? width;
+  final int? height;
 
-  static Stream<UVCCameraEvent>? _eventStream;
+  const PreviewSize({this.width, this.height});
 
-  /// 获取 UVCCamera 事件流
-  static Stream<UVCCameraEvent> get eventStream {
-    _eventStream ??= _eventChannel.receiveBroadcastStream().map(
-      (dynamic event) {
-        final map = event as Map<dynamic, dynamic>;
-        return UVCCameraEvent.fromMap(map);
-      },
-    );
-    return _eventStream!;
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'width': width,
+      'height': height,
+    };
   }
 
-  /// 获取设备列表
-  static Future<List<UVCCameraDevice>> getDeviceList() async {
-    try {
-      final result = await _channel.invokeMethod<List<dynamic>>(
-        'getDeviceList',
+  factory PreviewSize.fromJson(dynamic json) {
+    if (json is Map<dynamic, dynamic>) {
+      return PreviewSize(
+        width: json['width'] as int?,
+        height: json['height'] as int?,
       );
-      return result?.map((d) => UVCCameraDevice.fromMap(d)).toList() ?? [];
-    } catch (e) {
-      debugPrint('UVCCameraChannel: 获取设备列表失败: $e');
-      return [];
     }
-  }
-
-  /// 请求权限
-  static Future<bool> requestPermission(String deviceName) async {
-    try {
-      return await _channel.invokeMethod<bool>(
-            'requestPermission',
-            {'deviceName': deviceName},
-          ) ??
-          false;
-    } catch (e) {
-      debugPrint('UVCCameraChannel: 请求权限失败: $e');
-      return false;
-    }
-  }
-
-  /// 检查是否有权限
-  static Future<bool> hasPermission(String deviceName) async {
-    try {
-      return await _channel.invokeMethod<bool>(
-            'hasPermission',
-            {'deviceName': deviceName},
-          ) ??
-          false;
-    } catch (e) {
-      debugPrint('UVCCameraChannel: 检查权限失败: $e');
-      return false;
-    }
-  }
-
-  /// 打开摄像头
-  static Future<bool> openCamera(String deviceName) async {
-    try {
-      return await _channel.invokeMethod<bool>(
-            'openCamera',
-            {'deviceName': deviceName},
-          ) ??
-          false;
-    } catch (e) {
-      debugPrint('UVCCameraChannel: 打开摄像头失败: $e');
-      return false;
-    }
-  }
-
-  /// 关闭摄像头
-  static Future<bool> closeCamera() async {
-    try {
-      return await _channel.invokeMethod<bool>('closeCamera') ?? false;
-    } catch (e) {
-      debugPrint('UVCCameraChannel: 关闭摄像头失败: $e');
-      return false;
-    }
-  }
-
-  /// 检查摄像头是否打开
-  static Future<bool> isCameraOpened() async {
-    try {
-      return await _channel.invokeMethod<bool>('isCameraOpened') ?? false;
-    } catch (e) {
-      debugPrint('UVCCameraChannel: 检查摄像头状态失败: $e');
-      return false;
-    }
+    return const PreviewSize();
   }
 }
 
-/// UVCCamera 设备信息
-class UVCCameraDevice {
-  final String deviceName;
-  final int vendorId;
-  final int productId;
-  final String manufacturerName;
-  final String productName;
+enum UVCCameraState { opened, closed, error }
 
-  const UVCCameraDevice({
-    required this.deviceName,
-    required this.vendorId,
-    required this.productId,
-    required this.manufacturerName,
-    required this.productName,
+class UVCCameraViewParamsEntity {
+  final int? minFps;
+  final int? maxFps;
+  final int? frameFormat;
+  final double? bandwidthFactor;
+  final int? preferredWidth;
+  final int? preferredHeight;
+
+  const UVCCameraViewParamsEntity({
+    this.minFps = 10,
+    this.maxFps = 60,
+    this.frameFormat = 1,
+    this.bandwidthFactor = 1.0,
+    this.preferredWidth,
+    this.preferredHeight,
   });
 
-  factory UVCCameraDevice.fromMap(Map<dynamic, dynamic> map) {
-    return UVCCameraDevice(
-      deviceName: map['deviceName'] as String? ?? '',
-      vendorId: map['vendorId'] as int? ?? 0,
-      productId: map['productId'] as int? ?? 0,
-      manufacturerName: map['manufacturerName'] as String? ?? '',
-      productName: map['productName'] as String? ?? '',
-    );
-  }
-
-  @override
-  String toString() {
-    return 'UVCCameraDevice($productName, VID: 0x${vendorId.toRadixString(16)}, PID: 0x${productId.toRadixString(16)})';
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'minFps': minFps,
+      'maxFps': maxFps,
+      'frameFormat': frameFormat,
+      'bandwidthFactor': bandwidthFactor,
+      'preferredWidth': preferredWidth,
+      'preferredHeight': preferredHeight,
+    };
   }
 }
 
-/// UVCCamera 事件
-class UVCCameraEvent {
-  final String event;
-  final String deviceName;
-  final bool? success;
-  final int? vendorId;
-  final int? productId;
+class UVCCameraController {
+  static const MethodChannel _channel =
+      MethodChannel('selene.uvc_camera/channel');
 
-  const UVCCameraEvent({
-    required this.event,
-    required this.deviceName,
-    this.success,
-    this.vendorId,
-    this.productId,
-  });
+  UVCCameraState _cameraState = UVCCameraState.closed;
+  final List<PreviewSize> _previewSizes = <PreviewSize>[];
 
-  factory UVCCameraEvent.fromMap(Map<dynamic, dynamic> map) {
-    return UVCCameraEvent(
-      event: map['event'] as String? ?? '',
-      deviceName: map['deviceName'] as String? ?? '',
-      success: map['success'] as bool?,
-      vendorId: map['vendorId'] as int?,
-      productId: map['productId'] as int?,
-    );
+  bool _disposed = false;
+
+  void Function(UVCCameraState state)? cameraStateCallback;
+  void Function(String path)? clickTakePictureButtonCallback;
+  void Function(String message)? msgCallback;
+
+  UVCCameraState get cameraState => _cameraState;
+  List<PreviewSize> get previewSizes =>
+      List<PreviewSize>.unmodifiable(_previewSizes);
+
+  UVCCameraController() {
+    _channel.setMethodCallHandler(_handleMethodCall);
   }
 
-  @override
-  String toString() {
-    return 'UVCCameraEvent($event: $deviceName)';
+  Future<void> _handleMethodCall(MethodCall call) async {
+    if (_disposed) {
+      return;
+    }
+
+    switch (call.method) {
+      case 'callFlutter':
+        final dynamic arguments = call.arguments;
+        if (arguments is Map) {
+          final String? message = arguments['msg'] as String?;
+          if (message != null && message.isNotEmpty) {
+            msgCallback?.call(message);
+          }
+        }
+        break;
+      case 'takePictureSuccess':
+        final String? path = call.arguments as String?;
+        if (path != null && path.isNotEmpty) {
+          clickTakePictureButtonCallback?.call(path);
+        }
+        break;
+      case 'CameraState':
+        _setCameraState(call.arguments?.toString() ?? '');
+        break;
+      default:
+        break;
+    }
+  }
+
+  Future<void> initializeCamera() async {
+    await _channel.invokeMethod<void>('initializeCamera');
+  }
+
+  Future<void> openUVCCamera() async {
+    await _channel.invokeMethod<void>('openUVCCamera');
+  }
+
+  Future<void> closeCamera() async {
+    await _channel.invokeMethod<void>('closeCamera');
+  }
+
+  Future<List<PreviewSize>> getAllPreviewSizes() async {
+    final String? raw =
+        await _channel.invokeMethod<String>('getAllPreviewSizes');
+    _previewSizes
+      ..clear()
+      ..addAll(_decodePreviewSizes(raw));
+    return previewSizes;
+  }
+
+  Future<String?> getCurrentCameraRequestParameters() async {
+    return _channel.invokeMethod<String>('getCurrentCameraRequestParameters');
+  }
+
+  Future<void> updateResolution(PreviewSize? previewSize) async {
+    await _channel.invokeMethod<void>('updateResolution', previewSize?.toMap());
+  }
+
+  Future<String?> takePicture() async {
+    return _channel.invokeMethod<String>('takePicture');
+  }
+
+  Future<String?> captureVideo() async {
+    return _channel.invokeMethod<String>('captureVideo');
+  }
+
+  Future<void> setZoom(int zoom) async {
+    await _channel
+        .invokeMethod<void>('setZoom', <String, dynamic>{'zoom': zoom});
+  }
+
+  Future<int?> getZoom() async {
+    return _channel.invokeMethod<int>('getZoom');
+  }
+
+  Future<int?> getMaxZoom() async {
+    return _channel.invokeMethod<int>('getMaxZoom');
+  }
+
+  Future<void> resetZoom() async {
+    await _channel.invokeMethod<void>('resetZoom');
+  }
+
+  void dispose() {
+    _disposed = true;
+    _channel.setMethodCallHandler(null);
+  }
+
+  void _setCameraState(String state) {
+    if (state == 'OPENED') {
+      _cameraState = UVCCameraState.opened;
+      cameraStateCallback?.call(UVCCameraState.opened);
+      return;
+    }
+    if (state == 'CLOSED') {
+      _cameraState = UVCCameraState.closed;
+      cameraStateCallback?.call(UVCCameraState.closed);
+      return;
+    }
+    if (state.contains('ERROR')) {
+      _cameraState = UVCCameraState.error;
+      cameraStateCallback?.call(UVCCameraState.error);
+      msgCallback?.call(state);
+    }
+  }
+
+  List<PreviewSize> _decodePreviewSizes(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return <PreviewSize>[];
+    }
+
+    try {
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is List) {
+        return decoded.map<PreviewSize>((dynamic item) {
+          return PreviewSize.fromJson(item);
+        }).toList();
+      }
+    } catch (_) {
+      return <PreviewSize>[];
+    }
+    return <PreviewSize>[];
   }
 }
 
-/// UVCCamera 平台视图 Widget
-class UVCCameraView extends StatelessWidget {
-  final Map<String, dynamic>? creationParams;
+class UVCCameraView extends StatefulWidget {
+  final UVCCameraController cameraController;
+  final double width;
+  final double height;
+  final UVCCameraViewParamsEntity? params;
 
   const UVCCameraView({
     super.key,
-    this.creationParams,
+    required this.cameraController,
+    required this.width,
+    required this.height,
+    this.params,
   });
 
   @override
+  State<UVCCameraView> createState() => _UVCCameraViewState();
+}
+
+class _UVCCameraViewState extends State<UVCCameraView> {
+  @override
   Widget build(BuildContext context) {
-    // 使用 AndroidView 嵌入原生 UVCCamera 预览
-    return const AndroidView(
-      viewType: 'selene.uvc_camera/view',
-      creationParamsCodec: StandardMessageCodec(),
+    return SizedBox(
+      width: widget.width,
+      height: widget.height,
+      child: AndroidView(
+        viewType: 'selene.uvc_camera/view',
+        creationParams: widget.params?.toMap(),
+        creationParamsCodec: const StandardMessageCodec(),
+        onPlatformViewCreated: (int _) {
+          widget.cameraController.initializeCamera();
+        },
+      ),
     );
   }
 }

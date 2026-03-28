@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_uvc_camera/flutter_uvc_camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:selene/design/design_system.dart';
 import 'package:selene/services/usb_capture_channel.dart';
 import 'package:selene/services/usb_capture_service.dart';
+import 'package:selene/services/uvc_camera_channel.dart';
 
 class UVCCameraScreen extends StatefulWidget {
   const UVCCameraScreen({super.key});
@@ -37,11 +37,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   DateTime _lastStatusUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   PreviewSize? _activePreviewSize;
   PreviewSize? _preferredPreviewSize;
-  double _previewScale = 1.0;
-  double _previewScaleStart = 1.0;
-  Offset _previewOffset = Offset.zero;
-  Offset _previewOffsetStart = Offset.zero;
-  Offset _gestureStartFocalPoint = Offset.zero;
 
   @override
   void initState() {
@@ -203,7 +198,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
           await _waitCameraReady(timeout: const Duration(seconds: 15));
       if (!ready) return _setErrorMessage('摄像头初始化较慢，请稍后重试');
       await _syncCameraDetails(applyPreferredResolution: true);
-      _resetPreviewTransform();
       _updateStatusMessage('预览已开启');
     } catch (e) {
       _setErrorMessage(_normalizeOpenError(e));
@@ -309,7 +303,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     try {
       await _cameraController?.getAllPreviewSizes();
       return List<PreviewSize>.from(
-          _cameraController?.getPreviewSizes ?? <PreviewSize>[]);
+          _cameraController?.previewSizes ?? <PreviewSize>[]);
     } catch (e) {
       debugPrint('UVCCameraScreen: read preview sizes failed: $e');
       return <PreviewSize>[];
@@ -327,7 +321,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
         preferred != null &&
         !_samePreviewSize(active, preferred)) {
       try {
-        _cameraController?.updateResolution(preferred);
+        await _cameraController?.updateResolution(preferred);
         _didApplyPreferredResolution = true;
         await Future<void>.delayed(const Duration(milliseconds: 450));
         final Map<String, dynamic>? refreshed = await _readCameraRequestInfo();
@@ -406,14 +400,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
       _isOpeningCamera = false;
       _isInitializing = false;
     });
-  }
-
-  void _resetPreviewTransform() {
-    _previewScale = 1.0;
-    _previewScaleStart = 1.0;
-    _previewOffset = Offset.zero;
-    _previewOffsetStart = Offset.zero;
-    _gestureStartFocalPoint = Offset.zero;
   }
 
   Future<void> _takePicture() async {
@@ -538,38 +524,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     return width / height;
   }
 
-  double _maxPreviewScale(Size viewport, double devicePixelRatio) {
-    final int width =
-        _activePreviewSize?.width ?? _preferredPreviewSize?.width ?? 0;
-    final int height =
-        _activePreviewSize?.height ?? _preferredPreviewSize?.height ?? 0;
-    if (width <= 0 || height <= 0) {
-      return 3.0;
-    }
-    final double displayWidthPx = viewport.width * devicePixelRatio;
-    final double displayHeightPx = viewport.height * devicePixelRatio;
-    if (displayWidthPx <= 0 || displayHeightPx <= 0) {
-      return 3.0;
-    }
-    final double widthRatio = width / displayWidthPx;
-    final double heightRatio = height / displayHeightPx;
-    final double safeScale =
-        widthRatio < heightRatio ? widthRatio : heightRatio;
-    return safeScale.clamp(1.0, 4.0);
-  }
-
-  Offset _clampPreviewOffset(Offset value, Size viewport, double scale) {
-    final double maxDx = (viewport.width * scale - viewport.width) / 2;
-    final double maxDy = (viewport.height * scale - viewport.height) / 2;
-    if (maxDx <= 0 && maxDy <= 0) {
-      return Offset.zero;
-    }
-    return Offset(
-      value.dx.clamp(-maxDx, maxDx),
-      value.dy.clamp(-maxDy, maxDy),
-    );
-  }
-
   Widget _buildPlatformPreview({
     required double width,
     required double height,
@@ -590,128 +544,65 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   }
 
   Widget _buildInteractivePreview(BoxConstraints constraints) {
-    final double aspectRatio = _currentAspectRatio();
-    return Center(
-      child: AspectRatio(
-        aspectRatio: aspectRatio,
-        child: LayoutBuilder(
-          builder: (BuildContext context, BoxConstraints innerConstraints) {
-            final Size viewport = Size(
-              innerConstraints.maxWidth,
-              innerConstraints.maxHeight,
-            );
-            final double maxScale = _maxPreviewScale(
-              viewport,
-              MediaQuery.of(context).devicePixelRatio,
-            );
-            final double scale = _previewScale.clamp(1.0, maxScale);
-            final Offset offset = _clampPreviewOffset(
-              _previewOffset,
-              viewport,
-              scale,
-            );
-            final double childWidth = viewport.width * scale;
-            final double childHeight = viewport.height * scale;
-            final double left = (viewport.width - childWidth) / 2 + offset.dx;
-            final double top = (viewport.height - childHeight) / 2 + offset.dy;
-
-            return ClipRect(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onDoubleTap: _isCameraOpen
-                    ? () {
-                        setState(_resetPreviewTransform);
-                      }
-                    : null,
-                onScaleStart: _isCameraOpen
-                    ? (ScaleStartDetails details) {
-                        _previewScaleStart = _previewScale;
-                        _previewOffsetStart = _previewOffset;
-                        _gestureStartFocalPoint = details.localFocalPoint;
-                      }
-                    : null,
-                onScaleUpdate: _isCameraOpen
-                    ? (ScaleUpdateDetails details) {
-                        final double nextScale =
-                            (_previewScaleStart * details.scale)
-                                .clamp(1.0, maxScale);
-                        Offset nextOffset = _previewOffsetStart +
-                            (details.localFocalPoint - _gestureStartFocalPoint);
-                        if (nextScale <= 1.0) {
-                          nextOffset = Offset.zero;
-                        } else {
-                          nextOffset = _clampPreviewOffset(
-                            nextOffset,
-                            viewport,
-                            nextScale,
-                          );
-                        }
-                        setState(() {
-                          _previewScale = nextScale;
-                          _previewOffset = nextOffset;
-                        });
-                      }
-                    : null,
-                child: Stack(
-                  children: <Widget>[
-                    Positioned(
-                      left: left,
-                      top: top,
-                      width: childWidth,
-                      height: childHeight,
-                      child: _buildPlatformPreview(
-                        width: childWidth,
-                        height: childHeight,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
+    return ClipRect(
+      child: _buildPlatformPreview(
+        width: constraints.maxWidth,
+        height: constraints.maxHeight,
       ),
     );
   }
 
   Widget _buildPreviewSurface() {
+    final double aspectRatio = _currentAspectRatio();
     final BorderRadius radius = BorderRadius.circular(12);
-    final Widget preview = LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        return _buildInteractivePreview(constraints);
-      },
-    );
-    return Container(
-      margin: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: radius,
-        boxShadow: AppShadows.medium,
-      ),
-      child: ClipRRect(
-        borderRadius: radius,
-        child: Stack(
-          fit: StackFit.expand,
-          children: <Widget>[
-            preview,
-            if (_isInitializing || (_isOpeningCamera && !_isCameraOpen))
-              const Center(
-                  child: CircularProgressIndicator(color: Colors.white)),
-            if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
-              Positioned.fill(
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    onTap: () => unawaited(_openCamera()),
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-              ),
-            if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
-              const Center(
-                  child: Text('点击“打开”开始预览',
-                      style: TextStyle(color: Colors.white70, fontSize: 16))),
-          ],
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: radius,
+          boxShadow: AppShadows.medium,
+        ),
+        child: ClipRRect(
+          borderRadius: radius,
+          child: AspectRatio(
+            aspectRatio: aspectRatio,
+            child: LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                return Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    _buildInteractivePreview(constraints),
+                    if (_isInitializing || (_isOpeningCamera && !_isCameraOpen))
+                      const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
+                      ),
+                    if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
+                      Positioned.fill(
+                        child: Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: () => unawaited(_openCamera()),
+                            child: const SizedBox.expand(),
+                          ),
+                        ),
+                      ),
+                    if (!_isInitializing && !_isOpeningCamera && !_isCameraOpen)
+                      const Center(
+                        child: Text(
+                          '点击“打开”开始预览',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -858,12 +749,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
                   _formatPreviewSize(_preferredPreviewSize),
                   isDark,
                 ),
-                _buildMetric(
-                  '最新状态',
-                  _errorMessage ?? _statusMessage ?? '--',
-                  isDark,
-                  wide: true,
-                ),
               ],
             ),
           ],
@@ -926,7 +811,6 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
   }
 
   Widget _buildNormalLayout(bool isDark) {
-    final int previewFlex = _isOverviewExpanded ? 6 : 9;
     return Scaffold(
       backgroundColor:
           isDark ? AppColors.darkBackground : AppColors.lightBackground,
@@ -940,11 +824,9 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
       body: Column(
         children: <Widget>[
           _buildStatusBar(),
-          Expanded(
-            flex: previewFlex,
-            child: _buildPreviewSurface(),
-          ),
+          _buildPreviewSurface(),
           _buildDeviceOverview(isDark),
+          const Spacer(),
           _buildControls(),
         ],
       ),

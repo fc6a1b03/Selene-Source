@@ -5,6 +5,7 @@ import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
+import com.selene.uvc.UvcCameraPlugin
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import com.selene.usb.UsbCapturePlugin
@@ -18,6 +19,7 @@ import com.selene.usb.UsbCapturePlugin
 class MainActivity : FlutterActivity() {
 
     private var usbCapturePlugin: UsbCapturePlugin? = null
+    private var uvcCameraPlugin: UvcCameraPlugin? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,10 +58,12 @@ class MainActivity : FlutterActivity() {
         
         // 注册 USB 采集卡插件
         usbCapturePlugin = UsbCapturePlugin.registerWith(flutterEngine, this)
+        uvcCameraPlugin = UvcCameraPlugin.registerWith(flutterEngine, this)
     }
 
     override fun onDestroy() {
         usbCapturePlugin?.dispose()
+        uvcCameraPlugin?.dispose()
         super.onDestroy()
     }
 }
