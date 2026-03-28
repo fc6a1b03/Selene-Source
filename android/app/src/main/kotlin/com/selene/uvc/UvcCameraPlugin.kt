@@ -67,6 +67,11 @@ class UvcCameraPlugin(
                 result.success(null)
             }
 
+            "disposePlatformView" -> {
+                viewFactory.dispose()
+                result.success(null)
+            }
+
             else -> result.notImplemented()
         }
     }

@@ -85,23 +85,9 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
         return;
       }
       if (event.type == UsbCaptureEventType.detached) {
-        // USB 拔出时显示提示并强制返回首页
-        _showUsbDetachedMessage();
-        unawaited(_closePage());
+        unawaited(_closePage(returnToHome: true));
       }
     });
-  }
-
-  /// 显示 USB 已拔出的提示
-  void _showUsbDetachedMessage() {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('USB 设备已断开'),
-        duration: Duration(seconds: 2),
-        backgroundColor: Colors.orange,
-      ),
-    );
   }
 
   void _detachUsbDisconnectListener() {
@@ -109,33 +95,65 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     _usbEventSubscription = null;
   }
 
-  void _releaseCameraResources() {
+  Future<void> _releaseCameraResourcesAsync() async {
+    final UVCCameraController? controller = _cameraController;
     try {
-      _cameraController?.closeCamera();
-      _cameraController?.dispose();
+      if (controller != null) {
+        await controller.closeCamera();
+        await controller.disposePlatformView();
+        controller.dispose();
+      }
     } catch (e) {
       debugPrint('UVCCameraScreen: release error: $e');
     } finally {
       _cameraController = null;
-      _recordingFuture = null;
-      _activePreviewSize = null;
-      _preferredPreviewSize = null;
-      _didApplyPreferredResolution = false;
+      _resetScreenState();
     }
   }
 
-  Future<void> _closePage({bool returnToHome = true}) async {
+  void _releaseCameraResources() {
+    final UVCCameraController? controller = _cameraController;
+    try {
+      controller?.closeCamera();
+      unawaited(controller?.disposePlatformView() ?? Future<void>.value());
+      controller?.dispose();
+    } catch (e) {
+      debugPrint('UVCCameraScreen: release error: $e');
+    } finally {
+      _cameraController = null;
+      _resetScreenState();
+    }
+  }
+
+  void _resetScreenState() {
+    _recordingFuture = null;
+    _activePreviewSize = null;
+    _preferredPreviewSize = null;
+    _didApplyPreferredResolution = false;
+    _isCameraOpen = false;
+    _isOpeningCamera = false;
+    _isInitializing = false;
+    _isRecording = false;
+    _isStoppingRecording = false;
+    _isOverviewExpanded = false;
+    _isInfoPanelMinimized = false;
+    _isControlPanelMinimized = false;
+    _statusMessage = null;
+    _errorMessage = null;
+  }
+
+  Future<void> _closePage({bool returnToHome = false}) async {
     if (_isClosingPage) {
       return;
     }
     _isClosingPage = true;
     _detachUsbDisconnectListener();
-    _releaseCameraResources();
+    await _releaseCameraResourcesAsync();
 
     if (mounted) {
       if (returnToHome) {
-        // USB 拔出时返回首页，确保清理所有中间页面
-        Navigator.of(context).popUntil((route) => route.isFirst);
+        Navigator.of(context, rootNavigator: true)
+            .popUntil((Route<dynamic> route) => route.isFirst);
       } else {
         Navigator.of(context).pop();
       }
@@ -237,7 +255,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
       final bool ready =
           await _waitCameraReady(timeout: const Duration(seconds: 15));
       if (!ready) return _setErrorMessage('摄像头初始化较慢，请稍后重试');
-      await _syncCameraDetails(applyPreferredResolution: true);
+      await _syncCameraDetails(applyPreferredResolution: false);
       _updateStatusMessage('预览已开启');
     } catch (e) {
       _setErrorMessage(_normalizeOpenError(e));
@@ -291,7 +309,7 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
           _errorMessage = null;
         });
         _updateStatusMessage('摄像头已打开');
-        unawaited(_syncCameraDetails(applyPreferredResolution: true));
+        unawaited(_syncCameraDetails(applyPreferredResolution: false));
         return;
       }
       if (state == UVCCameraState.closed) {
@@ -551,22 +569,18 @@ class _UVCCameraScreenState extends State<UVCCameraScreen> {
     }
     return KeyedSubtree(
       key: _previewKey,
-      child: RepaintBoundary(
-        child: UVCCameraView(
-          cameraController: _cameraController!,
-          width: width,
-          height: height,
-        ),
+      child: UVCCameraView(
+        cameraController: _cameraController!,
+        width: width,
+        height: height,
       ),
     );
   }
 
   Widget _buildInteractivePreview(BoxConstraints constraints) {
-    return ClipRect(
-      child: _buildPlatformPreview(
-        width: constraints.maxWidth,
-        height: constraints.maxHeight,
-      ),
+    return _buildPlatformPreview(
+      width: constraints.maxWidth,
+      height: constraints.maxHeight,
     );
   }
 

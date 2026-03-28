@@ -72,6 +72,7 @@ class UVCCameraController {
   void Function(String message)? msgCallback;
 
   UVCCameraState get cameraState => _cameraState;
+
   List<PreviewSize> get previewSizes =>
       List<PreviewSize>.unmodifiable(_previewSizes);
 
@@ -160,6 +161,10 @@ class UVCCameraController {
 
   Future<void> resetZoom() async {
     await _channel.invokeMethod<void>('resetZoom');
+  }
+
+  Future<void> disposePlatformView() async {
+    await _channel.invokeMethod<void>('disposePlatformView');
   }
 
   void dispose() {

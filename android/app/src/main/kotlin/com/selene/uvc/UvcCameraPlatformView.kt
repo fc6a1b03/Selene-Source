@@ -17,6 +17,7 @@ import com.jiangdg.ausbc.callback.ICaptureCallBack
 import com.jiangdg.ausbc.callback.IDeviceConnectCallBack
 import com.jiangdg.ausbc.utils.Logger
 import com.jiangdg.ausbc.utils.SettableFuture
+import com.jiangdg.ausbc.widget.AspectRatioTextureView
 import com.jiangdg.usb.USBMonitor
 import com.jiangdg.uvc.IButtonCallback
 import io.flutter.plugin.common.MethodChannel
@@ -37,7 +38,7 @@ class UvcCameraPlatformView(
     }
 
     private val rootView = FrameLayout(context)
-    private val cameraView = TextureView(context)
+    private val cameraView = AspectRatioTextureView(context)
     private val cameraParams = buildCameraParams(args)
 
     private var cameraClient: MultiCameraClient? = null
@@ -49,6 +50,7 @@ class UvcCameraPlatformView(
     private var pendingOpen = false
     private var latestPreviewWidth = 0
     private var latestPreviewHeight = 0
+    private var hasRenderedFirstFrame = false
     private var displayScale = 1f
     private var displayTranslationX = 0f
     private var displayTranslationY = 0f
@@ -72,8 +74,14 @@ class UvcCameraPlatformView(
     override fun getView(): View = rootView
 
     override fun dispose() {
+        pendingOpen = false
+        cameraView.surfaceTextureListener = null
+        cameraView.setOnTouchListener(null)
         closeCameraInternal()
         unregisterCameraClient()
+        latestPreviewWidth = 0
+        latestPreviewHeight = 0
+        hasRenderedFirstFrame = false
         rootView.removeAllViews()
     }
 
@@ -183,7 +191,6 @@ class UvcCameraPlatformView(
         val height = (params["height"] as? Number)?.toInt() ?: return
         latestPreviewWidth = width
         latestPreviewHeight = height
-        cameraView.surfaceTexture?.setDefaultBufferSize(width, height)
         getCurrentCamera()?.updateResolution(width, height)
     }
 
@@ -230,11 +237,6 @@ class UvcCameraPlatformView(
     private fun bindTextureLifecycle() {
         cameraView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-                // 设置默认缓冲区大小
-                val targetWidth = if (latestPreviewWidth > 0) latestPreviewWidth else BuildConfig.UVC_PREFERRED_WIDTH
-                val targetHeight = if (latestPreviewHeight > 0) latestPreviewHeight else BuildConfig.UVC_PREFERRED_HEIGHT
-                surface.setDefaultBufferSize(targetWidth, targetHeight)
-                
                 registerCameraClient()
                 
                 // 如果相机已经连接且等待打开，立即打开
@@ -253,7 +255,17 @@ class UvcCameraPlatformView(
                 return true
             }
 
-            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) = Unit
+            override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
+                if (!hasRenderedFirstFrame) {
+                    hasRenderedFirstFrame = true
+                    callFlutter("预览首帧已到达")
+                }
+                // Flutter 官方文档要求: PlatformView 内包含 SurfaceTexture 时，
+                // 内容更新后需要手动触发 invalidate，否则可能长期停留在黑帧。
+                cameraView.invalidate()
+                rootView.invalidate()
+                rootView.postInvalidateOnAnimation()
+            }
         }
     }
 
@@ -270,7 +282,11 @@ class UvcCameraPlatformView(
             override fun onAttachDev(device: UsbDevice?) {
                 device ?: return
                 if (cameraMap.containsKey(device.deviceId)) return
-                cameraMap[device.deviceId] = SeleneCameraUvc(activity, device, cameraParams)
+                cameraMap[device.deviceId] = SeleneCameraUvc(
+                    activity,
+                    device,
+                    cameraParams,
+                )
                 if (requestingPermission.get()) return
                 requestPermission(device)
             }
@@ -337,14 +353,19 @@ class UvcCameraPlatformView(
             return
         }
         
+        // 确保 TextureView 已经附加到窗口并有有效尺寸
+        if (cameraView.width <= 0 || cameraView.height <= 0) {
+            pendingOpen = true
+            // 延迟重试
+            cameraView.postDelayed({ tryOpenCurrentCamera() }, 100)
+            return
+        }
+        
         pendingOpen = false
-        
-        // 设置默认缓冲区大小
+
+        // 打开相机
+        hasRenderedFirstFrame = false
         val request = getCameraRequest()
-        surfaceTexture.setDefaultBufferSize(request.previewWidth, request.previewHeight)
-        latestPreviewWidth = request.previewWidth
-        latestPreviewHeight = request.previewHeight
-        
         camera.openCamera(cameraView, request)
         camera.setCameraStateCallBack(this)
     }
@@ -359,6 +380,7 @@ class UvcCameraPlatformView(
     }
 
     private fun closeCameraInternal() {
+        hasRenderedFirstFrame = false
         getCurrentCamera()?.closeCamera()
         resetPreviewTransformState()
     }
@@ -454,11 +476,11 @@ class UvcCameraPlatformView(
     }
 
     private fun getCameraRequest(): com.jiangdg.ausbc.camera.bean.CameraRequest {
-        // 使用 NORMAL 渲染模式直接渲染到 TextureView，避免 OPENGL 模式下的黑屏问题
+        // 先用更保守的 640x480 建立首帧预览，待画面稳定后再由上层决定是否切换更高分辨率。
         return com.jiangdg.ausbc.camera.bean.CameraRequest.Builder()
-            .setPreviewWidth(BuildConfig.UVC_PREFERRED_WIDTH)
-            .setPreviewHeight(BuildConfig.UVC_PREFERRED_HEIGHT)
-            .setRenderMode(com.jiangdg.ausbc.camera.bean.CameraRequest.RenderMode.NORMAL)
+            .setPreviewWidth(640)
+            .setPreviewHeight(480)
+            .setRenderMode(com.jiangdg.ausbc.camera.bean.CameraRequest.RenderMode.OPENGL)
             .setDefaultRotateType(com.jiangdg.ausbc.render.env.RotateType.ANGLE_0)
             .setAudioSource(com.jiangdg.ausbc.camera.bean.CameraRequest.AudioSource.SOURCE_SYS_MIC)
             .setAspectRatioShow(true)
@@ -469,8 +491,9 @@ class UvcCameraPlatformView(
 
     private fun buildCameraParams(args: Any?): Map<String, Any> {
         val defaults = mutableMapOf<String, Any>(
-            "preferredWidth" to BuildConfig.UVC_PREFERRED_WIDTH,
-            "preferredHeight" to BuildConfig.UVC_PREFERRED_HEIGHT,
+            // 先用更稳的预览分辨率拿到首帧，避免部分采集卡在首次打开时直接冲 1080p 导致黑屏。
+            "preferredWidth" to 640,
+            "preferredHeight" to 480,
             "minFps" to BuildConfig.UVC_MIN_FPS,
             "maxFps" to BuildConfig.UVC_MAX_FPS,
             "frameFormat" to BuildConfig.UVC_FRAME_FORMAT,

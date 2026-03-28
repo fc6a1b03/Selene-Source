@@ -7,7 +7,6 @@ import android.hardware.usb.UsbDevice
 import android.media.MediaScannerConnection
 import android.provider.MediaStore
 import android.view.Surface
-import android.view.SurfaceView
 import android.view.TextureView
 import com.jiangdg.ausbc.MultiCameraClient
 import com.jiangdg.ausbc.MultiCameraClient.Companion.CAPTURE_TIMES_OUT_SEC
@@ -31,6 +30,7 @@ class SeleneCameraUvc(
     ctx: Context,
     device: UsbDevice,
     private val params: Map<String, *>?,
+    private val onPreviewSizeChanged: ((width: Int, height: Int) -> Unit)? = null,
 ) : MultiCameraClient.ICamera(ctx, device) {
 
     companion object {
@@ -124,36 +124,93 @@ class SeleneCameraUvc(
             request.previewHeight = height
         }
 
+        // 尝试设置预览尺寸，先尝试 MJPEG，然后 YUYV，如果都失败则尝试常见分辨率
+        var previewSetSuccess = false
+        var finalPreviewSize = previewSize
+        
+        // 尝试 1: MJPEG 格式（首选）
         try {
-            initEncodeProcessor(previewSize.width, previewSize.height)
             uvcCamera?.setPreviewSize(
                 previewSize.width,
                 previewSize.height,
                 minFps,
                 maxFps,
-                frameFormat,
+                UVCCamera.FRAME_FORMAT_MJPEG,
                 bandwidthFactor,
             )
+            finalPreviewSize = previewSize
+            previewSetSuccess = true
         } catch (e: Exception) {
-            previewSize = choosePreviewSize(preferredWidth, preferredHeight).apply {
-                request.previewWidth = width
-                request.previewHeight = height
+            // 尝试 2: YUYV 格式（选择的分辨率）
+            if (!previewSetSuccess) {
+                try {
+                    val altSize = choosePreviewSize(preferredWidth, preferredHeight)
+                    uvcCamera?.setPreviewSize(
+                        altSize.width,
+                        altSize.height,
+                        minFps,
+                        maxFps,
+                        UVCCamera.FRAME_FORMAT_YUYV,
+                        UVCCamera.DEFAULT_BANDWIDTH,
+                    )
+                    finalPreviewSize = altSize
+                    previewSetSuccess = true
+                } catch (e2: Exception) {
+                    // 忽略，继续尝试
+                }
             }
-            try {
-                uvcCamera?.setPreviewSize(
-                    previewSize.width,
-                    previewSize.height,
-                    minFps,
-                    maxFps,
-                    UVCCamera.FRAME_FORMAT_YUYV,
-                    UVCCamera.DEFAULT_BANDWIDTH,
-                )
-            } catch (e2: Exception) {
-                closeCamera()
-                postStateEvent(ICameraStateCallBack.State.ERROR, "set preview size failed: ${e2.localizedMessage}")
-                return
+            
+            // 尝试 3: 常见分辨率 640x480 YUYV
+            if (!previewSetSuccess) {
+                try {
+                    uvcCamera?.setPreviewSize(
+                        640, 480,
+                        minFps,
+                        maxFps,
+                        UVCCamera.FRAME_FORMAT_YUYV,
+                        UVCCamera.DEFAULT_BANDWIDTH,
+                    )
+                    finalPreviewSize = PreviewSize(640, 480)
+                    previewSetSuccess = true
+                } catch (e3: Exception) {
+                    // 忽略
+                }
+            }
+            
+            // 尝试 4: 常见分辨率 1280x720 YUYV
+            if (!previewSetSuccess) {
+                try {
+                    uvcCamera?.setPreviewSize(
+                        1280, 720,
+                        minFps,
+                        maxFps,
+                        UVCCamera.FRAME_FORMAT_YUYV,
+                        UVCCamera.DEFAULT_BANDWIDTH,
+                    )
+                    finalPreviewSize = PreviewSize(1280, 720)
+                    previewSetSuccess = true
+                } catch (e4: Exception) {
+                    // 忽略
+                }
             }
         }
+        
+        if (!previewSetSuccess) {
+            closeCamera()
+            postStateEvent(ICameraStateCallBack.State.ERROR, "set preview size failed, tried multiple formats and resolutions")
+            return
+        }
+        
+        // 使用成功设置的尺寸
+        previewSize = finalPreviewSize
+        request.previewWidth = previewSize.width
+        request.previewHeight = previewSize.height
+        
+        // 记录实际预览尺寸，必要时再由上层使用。
+        onPreviewSizeChanged?.invoke(previewSize.width, previewSize.height)
+        
+        // 初始化编码处理器
+        initEncodeProcessor(previewSize.width, previewSize.height)
 
         // 在 NORMAL 模式下设置帧回调
         if (!isNeedGLESRender || request.isRawPreviewData || request.isCaptureRawImage) {
@@ -162,11 +219,7 @@ class SeleneCameraUvc(
 
         when (cameraView) {
             is Surface -> uvcCamera?.setPreviewDisplay(cameraView)
-            is SurfaceTexture -> {
-                cameraView.setDefaultBufferSize(previewSize.width, previewSize.height)
-                uvcCamera?.setPreviewTexture(cameraView)
-            }
-            is SurfaceView -> uvcCamera?.setPreviewDisplay(cameraView.holder)
+            is SurfaceTexture -> uvcCamera?.setPreviewTexture(cameraView)
             is TextureView -> {
                 val surfaceTexture = cameraView.surfaceTexture
                 if (surfaceTexture == null) {
@@ -174,7 +227,6 @@ class SeleneCameraUvc(
                     postStateEvent(ICameraStateCallBack.State.ERROR, "TextureView surfaceTexture is null")
                     return
                 }
-                surfaceTexture.setDefaultBufferSize(previewSize.width, previewSize.height)
                 uvcCamera?.setPreviewTexture(surfaceTexture)
             }
             else -> throw IllegalStateException("Only support Surface/SurfaceTexture/SurfaceView/TextureView")
