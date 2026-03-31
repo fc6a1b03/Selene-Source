@@ -1,0 +1,466 @@
+import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:selene/components/animations/glass_card.dart';
+import 'package:selene/design/design_system.dart';
+import 'package:selene/models/admin_config.dart';
+
+typedef AdminCategoryActionHandler = Future<bool> Function({
+  required String action,
+  String? name,
+  String? type,
+  String? query,
+  List<String>? order,
+});
+
+class AdminCategoryManagementCard extends StatefulWidget {
+  const AdminCategoryManagementCard({
+    super.key,
+    required this.isDark,
+    required this.categories,
+    required this.onAction,
+  });
+
+  final bool isDark;
+  final List<AdminCategoryConfig> categories;
+  final AdminCategoryActionHandler onAction;
+
+  @override
+  State<AdminCategoryManagementCard> createState() =>
+      _AdminCategoryManagementCardState();
+}
+
+class _AdminCategoryManagementCardState
+    extends State<AdminCategoryManagementCard> {
+  final TextEditingController _nameController = TextEditingController();
+  final TextEditingController _queryController = TextEditingController();
+  final Set<String> _loadingKeys = <String>{};
+
+  List<AdminCategoryConfig> _categories = <AdminCategoryConfig>[];
+  bool _showAddForm = false;
+  bool _orderDirty = false;
+  String _selectedType = 'movie';
+
+  @override
+  void initState() {
+    super.initState();
+    _syncCategories();
+  }
+
+  @override
+  void didUpdateWidget(covariant AdminCategoryManagementCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.categories != widget.categories) {
+      _syncCategories();
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _queryController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    '分类配置',
+                    style: AppTypography.headlineLargeStyle(
+                      isDark: widget.isDark,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '已接入分类添加、启停、删除和排序保存。',
+                    style: AppTypography.bodyMediumStyle(
+                      isDark: widget.isDark,
+                    ).copyWith(
+                      color: AppColors.textSecondary(isDark: widget.isDark),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            FilledButton.tonal(
+              onPressed: !_orderDirty || _loadingKeys.contains('save_order')
+                  ? null
+                  : _handleSaveOrder,
+              child: Text(
+                _loadingKeys.contains('save_order') ? '保存中...' : '保存排序',
+              ),
+            ),
+            const SizedBox(width: 8),
+            FilledButton.icon(
+              onPressed: () {
+                setState(() {
+                  _showAddForm = !_showAddForm;
+                });
+              },
+              icon: Icon(
+                _showAddForm ? LucideIcons.x : LucideIcons.plus,
+                size: 16,
+              ),
+              label: Text(_showAddForm ? '取消' : '添加分类'),
+            ),
+          ],
+        ),
+        if (_showAddForm) ...<Widget>[
+          const SizedBox(height: 16),
+          GlassCard(
+            isDark: widget.isDark,
+            child: Column(
+              children: <Widget>[
+                TextField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(hintText: '分类名称'),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedType,
+                  items: const <DropdownMenuItem<String>>[
+                    DropdownMenuItem<String>(
+                      value: 'movie',
+                      child: Text('电影'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'tv',
+                      child: Text('剧集'),
+                    ),
+                  ],
+                  onChanged: (String? value) {
+                    setState(() {
+                      _selectedType = value ?? 'movie';
+                    });
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _queryController,
+                  decoration: const InputDecoration(hintText: '搜索关键字'),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton(
+                    onPressed: _loadingKeys.contains('add_category')
+                        ? null
+                        : _handleAddCategory,
+                    child: Text(
+                      _loadingKeys.contains('add_category') ? '添加中...' : '确认添加',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
+        GlassCard(
+          isDark: widget.isDark,
+          child: _categories.isEmpty
+              ? Text(
+                  '暂无自定义分类',
+                  style: AppTypography.bodyMediumStyle(isDark: widget.isDark),
+                )
+              : ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: _categories.length,
+                  separatorBuilder: (BuildContext context, int index) =>
+                      const SizedBox(height: 12),
+                  itemBuilder: (BuildContext context, int index) {
+                    final AdminCategoryConfig category = _categories[index];
+                    return _buildCategoryCard(category, index);
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCategoryCard(AdminCategoryConfig category, int index) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: widget.isDark
+            ? AppColors.darkElevated.withValues(alpha: 0.55)
+            : AppColors.lightElevated.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color:
+              AppColors.border(isDark: widget.isDark).withValues(alpha: 0.32),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: <Widget>[
+              Text(
+                category.name.isEmpty ? '未命名分类' : category.name,
+                style: AppTypography.labelLargeStyle(isDark: widget.isDark),
+              ),
+              _buildBadge(
+                category.type == 'movie' ? '电影' : '剧集',
+                AppColors.secondary,
+              ),
+              _buildBadge(
+                category.disabled ? '已禁用' : '启用中',
+                category.disabled ? AppColors.error : AppColors.success,
+              ),
+              _buildBadge(
+                category.from == 'custom' ? '自定义' : '配置文件',
+                category.from == 'custom'
+                    ? AppColors.secondary
+                    : AppColors.primary,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SelectableText(
+            '关键字：${category.query}',
+            style: AppTypography.bodySmallStyle(isDark: widget.isDark),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              OutlinedButton(
+                onPressed:
+                    index == 0 ? null : () => _moveItem(index, index - 1),
+                child: const Text('上移'),
+              ),
+              OutlinedButton(
+                onPressed: index == _categories.length - 1
+                    ? null
+                    : () => _moveItem(index, index + 1),
+                child: const Text('下移'),
+              ),
+              OutlinedButton(
+                onPressed: _loadingKeys
+                        .contains('toggle_${category.query}_${category.type}')
+                    ? null
+                    : () => _runAction(
+                          loadingKey:
+                              'toggle_${category.query}_${category.type}',
+                          successMessage: category.disabled ? '已启用分类' : '已禁用分类',
+                          action: () => widget.onAction(
+                            action: category.disabled ? 'enable' : 'disable',
+                            query: category.query,
+                            type: category.type,
+                          ),
+                        ),
+                child: Text(
+                  _loadingKeys
+                          .contains('toggle_${category.query}_${category.type}')
+                      ? '处理中...'
+                      : (category.disabled ? '启用' : '禁用'),
+                ),
+              ),
+              if (category.from == 'custom')
+                OutlinedButton(
+                  onPressed: _loadingKeys
+                          .contains('delete_${category.query}_${category.type}')
+                      ? null
+                      : () => _handleDeleteCategory(category),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.error,
+                    side: BorderSide(
+                      color: AppColors.error.withValues(alpha: 0.45),
+                    ),
+                  ),
+                  child: Text(
+                    _loadingKeys.contains(
+                            'delete_${category.query}_${category.type}')
+                        ? '删除中...'
+                        : '删除',
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBadge(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: widget.isDark ? 0.18 : 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: AppTypography.labelSmallStyle(isDark: widget.isDark).copyWith(
+          color: color,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleAddCategory() async {
+    final String name = _nameController.text.trim();
+    final String query = _queryController.text.trim();
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+
+    if (name.isEmpty || query.isEmpty) {
+      _showSnackBar(messenger, '分类名称和关键字不能为空', false);
+      return;
+    }
+
+    final bool success = await _runAction(
+      loadingKey: 'add_category',
+      successMessage: '分类已添加',
+      action: () => widget.onAction(
+        action: 'add',
+        name: name,
+        type: _selectedType,
+        query: query,
+      ),
+    );
+
+    if (!mounted || !success) {
+      return;
+    }
+
+    _nameController.clear();
+    _queryController.clear();
+    setState(() {
+      _selectedType = 'movie';
+      _showAddForm = false;
+    });
+  }
+
+  Future<void> _handleDeleteCategory(AdminCategoryConfig category) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('确认删除分类'),
+          content: Text('确定要删除分类 ${category.name} 吗？此操作不可撤销。'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    await _runAction(
+      loadingKey: 'delete_${category.query}_${category.type}',
+      successMessage: '分类已删除',
+      action: () => widget.onAction(
+        action: 'delete',
+        query: category.query,
+        type: category.type,
+      ),
+    );
+  }
+
+  Future<void> _handleSaveOrder() async {
+    final bool success = await _runAction(
+      loadingKey: 'save_order',
+      successMessage: '分类排序已保存',
+      action: () => widget.onAction(
+        action: 'sort',
+        order: _categories
+            .map((item) => '${item.query}:${item.type}')
+            .toList(growable: false),
+      ),
+    );
+
+    if (!mounted || !success) {
+      return;
+    }
+
+    setState(() {
+      _orderDirty = false;
+    });
+  }
+
+  Future<bool> _runAction({
+    required String loadingKey,
+    required String successMessage,
+    required Future<bool> Function() action,
+  }) async {
+    if (_loadingKeys.contains(loadingKey)) {
+      return false;
+    }
+
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _loadingKeys.add(loadingKey);
+    });
+
+    final bool success = await action();
+
+    if (!mounted) {
+      return false;
+    }
+
+    setState(() {
+      _loadingKeys.remove(loadingKey);
+    });
+
+    _showSnackBar(
+      messenger,
+      success ? successMessage : '操作失败，请稍后重试',
+      success,
+    );
+    return success;
+  }
+
+  void _moveItem(int oldIndex, int newIndex) {
+    final List<AdminCategoryConfig> next =
+        List<AdminCategoryConfig>.from(_categories);
+    final AdminCategoryConfig item = next.removeAt(oldIndex);
+    next.insert(newIndex, item);
+    setState(() {
+      _categories = next;
+      _orderDirty = true;
+    });
+  }
+
+  void _showSnackBar(
+    ScaffoldMessengerState messenger,
+    String message,
+    bool success,
+  ) {
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: success ? AppColors.success : AppColors.error,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _syncCategories() {
+    _categories = List<AdminCategoryConfig>.from(widget.categories);
+    _orderDirty = false;
+  }
+}
