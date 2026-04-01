@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -223,7 +224,9 @@ class _AdminPanelPageState extends State<_AdminPanelPage> {
     final List<_SectionMeta> sections = _buildSections(controller.isOwner);
     return PageView.builder(
       controller: _pageController,
-      physics: const BouncingScrollPhysics(),
+      physics: Platform.isAndroid || Platform.isIOS
+          ? const BouncingScrollPhysics()
+          : const NeverScrollableScrollPhysics(),
       allowImplicitScrolling: true,
       onPageChanged: (int index) => _handleSectionPageChanged(sections, index),
       itemCount: sections.length,
@@ -980,7 +983,7 @@ class _AdminPanelPageState extends State<_AdminPanelPage> {
       ),
       _OverviewFact(
         label: '黄源过滤',
-        value: config.siteConfig.disableYellowFilter ? '关闭' : '开启',
+        value: config.siteConfig.disableYellowFilter ? '开启' : '关闭',
         color: config.siteConfig.disableYellowFilter
             ? AppColors.warning
             : AppColors.success,
