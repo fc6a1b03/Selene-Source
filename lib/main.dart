@@ -10,7 +10,9 @@ import 'package:selene/components/animations/modern_loading_animation.dart';
 import 'package:selene/design/colors.dart';
 import 'package:selene/screens/home_screen.dart';
 import 'package:selene/screens/login_screen.dart';
+import 'package:selene/services/advanced_download_manager.dart';
 import 'package:selene/services/api_service.dart';
+import 'package:selene/services/background_download_service.dart';
 import 'package:selene/services/douban_cache_service.dart';
 import 'package:selene/services/local_mode_storage_service.dart';
 import 'package:selene/services/speed_test_cache_service.dart';
@@ -21,6 +23,10 @@ import 'package:selene/services/user_data_service.dart';
 import 'package:selene/utils/hive_initializer.dart';
 import 'package:selene/utils/http_overrides.dart';
 import 'package:selene/utils/keyboard_error_handler.dart';
+import 'package:selene/widgets/download_floating_window.dart';
+
+// 全局 Navigator key，用于在 MaterialApp 外部获取 Navigator
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // 应用程序入口点
 void main() async {
@@ -71,6 +77,10 @@ void _initializeDeferredServices() async {
   cacheService.startPeriodicCleanup();
   // 初始化测速缓存服务 - 延迟执行
   await SpeedTestCacheService.init();
+  // 初始化高级下载管理器 - 延迟执行
+  await AdvancedDownloadManager().initialize();
+  // 初始化后台下载服务 - 延迟执行
+  await BackgroundDownloadService().initialize();
 }
 
 // 主应用程序组件
@@ -82,6 +92,9 @@ class SeleneApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (context) => ThemeService()),
+        ChangeNotifierProvider(create: (context) => AdvancedDownloadManager()),
+        ChangeNotifierProvider(
+            create: (context) => DownloadFloatingWindowController()),
         // USB 采集卡服务（Android 平台）
         if (Platform.isAndroid)
           ChangeNotifierProvider.value(value: UsbCaptureService.instance),
@@ -94,6 +107,7 @@ class SeleneApp extends StatelessWidget {
           final themeService =
               Provider.of<ThemeService>(context, listen: false);
           return MaterialApp(
+            navigatorKey: navigatorKey, // 全局 Navigator key
             title: 'Selene',
             debugShowCheckedModeBanner: false,
             theme: themeService.lightTheme,
@@ -111,6 +125,8 @@ class SeleneApp extends StatelessWidget {
                   child: app,
                 );
               }
+              // 添加下载浮窗
+              app = DownloadFloatingWindow(child: app);
               // 添加键盘事件处理，抑制已知的 Flutter 键盘问题
               return Focus(
                 onKeyEvent: (node, event) {

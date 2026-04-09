@@ -13,6 +13,7 @@ appId = "org.moontechlab.selene"
 gson = "2.13.2"
 appcompat = "1.7.1"
 android-usb-camera = "3.3.6"
+desugarJdkLibs = "2.1.5"
 uvcPreferredWidth = "1920"
 uvcPreferredHeight = "1080"
 uvcMinFps = "10"
@@ -23,6 +24,7 @@ uvcBandwidthFactor = "1.0"
 [libraries]
 google-gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+android-desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 android-usb-camera-libuvc = { group = "com.github.chenyeju295.AndroidUSBCamera", name = "libuvc", version.ref = "android-usb-camera" }
 android-usb-camera-libusbc = { group = "com.github.chenyeju295.AndroidUSBCamera", name = "libausbc", version.ref = "android-usb-camera" }
 

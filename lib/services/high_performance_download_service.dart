@@ -684,6 +684,14 @@ void _downloadIsolateEntry(SendPort mainSendPort) {
               mainSendPort: mainSendPort,
             );
             break;
+          case 'resume':
+            await _handleResumeDownload(
+              command: command,
+              dio: dio,
+              tasks: tasks,
+              mainSendPort: mainSendPort,
+            );
+            break;
           case 'cancel':
             await _handleCancelDownload(
               command: command,
@@ -813,6 +821,142 @@ Future<void> _handlePauseDownload({
       totalBytes: 0,
       status: 'paused',
     ).toMap());
+  }
+}
+
+/// 处理恢复下载（支持断点续传）
+Future<void> _handleResumeDownload({
+  required _DownloadCommand command,
+  required Dio dio,
+  required Map<String, _IsolateDownloadTask> tasks,
+  required SendPort mainSendPort,
+}) async {
+  final data = command.data!;
+  final url = data['url'] as String;
+  final tempFilePath = data['tempFilePath'] as String;
+  final headers = data['headers'] as Map<String, dynamic>?;
+  final isM3u8 = data['isM3u8'] as bool;
+
+  // 检查临时文件大小，用于断点续传
+  var resumeByte = 0;
+  final tempFile = File(tempFilePath);
+  if (tempFile.existsSync()) {
+    resumeByte = await tempFile.length();
+  }
+
+  final cancelToken = CancelToken();
+  final task = _IsolateDownloadTask(
+    taskId: command.taskId,
+    url: url,
+    tempFilePath: tempFilePath,
+    headers: headers,
+    isM3u8: isM3u8,
+    cancelToken: cancelToken,
+  );
+
+  tasks[command.taskId] = task;
+
+  try {
+    // 添加 Range header 用于断点续传
+    final resumeHeaders = Map<String, dynamic>.from(headers ?? {});
+    if (resumeByte > 0) {
+      resumeHeaders['Range'] = 'bytes=$resumeByte-';
+    }
+
+    if (isM3u8) {
+      await _downloadM3u8(
+        task: task,
+        dio: dio,
+        mainSendPort: mainSendPort,
+      );
+    } else {
+      await _downloadRegularFileWithResume(
+        task: task,
+        dio: dio,
+        mainSendPort: mainSendPort,
+        resumeByte: resumeByte,
+        headers: resumeHeaders,
+      );
+    }
+  } catch (e) {
+    if (!task.isCancelled && !task.isPaused) {
+      mainSendPort.send(_DownloadMessage(
+        taskId: command.taskId,
+        progress: 0.0,
+        downloadedBytes: 0,
+        totalBytes: 0,
+        status: 'failed',
+        errorMessage: e.toString(),
+      ).toMap());
+    }
+  } finally {
+    tasks.remove(command.taskId);
+  }
+}
+
+/// 下载普通文件（支持断点续传）
+Future<void> _downloadRegularFileWithResume({
+  required _IsolateDownloadTask task,
+  required Dio dio,
+  required SendPort mainSendPort,
+  required int resumeByte,
+  required Map<String, dynamic> headers,
+}) async {
+  // 获取文件大小
+  final headRes = await dio.head<dynamic>(
+    task.url,
+    options: Options(headers: headers.cast<String, String>()),
+    cancelToken: task.cancelToken,
+  );
+
+  final totalBytes = int.tryParse(
+        headRes.headers.value('content-length') ?? '0',
+      ) ??
+      0;
+
+  var downloadedBytes = resumeByte;
+
+  // 使用 append 模式打开文件
+  final file = File(task.tempFilePath);
+  final fileSink = file.openWrite(mode: FileMode.append);
+
+  try {
+    await dio.download(
+      task.url,
+      task.tempFilePath,
+      options: Options(
+        headers: headers.cast<String, String>(),
+        receiveTimeout: const Duration(minutes: 30),
+      ),
+      cancelToken: task.cancelToken,
+      onReceiveProgress: (received, total) {
+        if (task.isPaused || task.isCancelled) return;
+
+        downloadedBytes = resumeByte + received;
+        final actualTotal = total > 0 ? resumeByte + total : downloadedBytes;
+        final progress = actualTotal > 0 ? downloadedBytes / actualTotal : 0.0;
+
+        mainSendPort.send(_DownloadMessage(
+          taskId: task.taskId,
+          progress: progress,
+          downloadedBytes: downloadedBytes,
+          totalBytes: actualTotal,
+          status: 'downloading',
+        ).toMap());
+      },
+    );
+
+    if (!task.isPaused && !task.isCancelled) {
+      mainSendPort.send(_DownloadMessage(
+        taskId: task.taskId,
+        progress: 1.0,
+        downloadedBytes: downloadedBytes,
+        totalBytes: totalBytes > 0 ? totalBytes : downloadedBytes,
+        status: 'completed',
+      ).toMap());
+    }
+  } finally {
+    await fileSink.close();
   }
 }
 

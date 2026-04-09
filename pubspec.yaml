@@ -50,6 +50,7 @@ dependencies:
   # ====================
   # Android / iOS / 桌面端
   app_settings: ^7.0.0
+  flutter_local_notifications: ^18.0.1
   gal: ^2.3.0
   package_info_plus: ^9.0.0
   path_provider: ^2.1.3

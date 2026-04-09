@@ -6,7 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:selene/components/animations/video_loading_animation.dart';
+import 'package:selene/models/download_task_persistent.dart';
 import 'package:selene/models/video_download_info.dart';
+import 'package:selene/services/advanced_download_manager.dart';
 import 'package:selene/services/download_service.dart';
 import 'package:selene/utils/pip_manager.dart';
 import 'package:selene/widgets/mobile_player_controls.dart';
@@ -674,14 +676,22 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   Future<void> _startDownload({String? fileName}) async {
     if (_currentUrl == null) return;
 
+    // 使用高级下载管理器
+    final downloadManager = AdvancedDownloadManager();
+    await downloadManager.initialization;
+
     // 检查是否已有下载任务
-    if (_downloadInfo.taskId != null) {
-      final existingTask = _downloadService.getTask(_downloadInfo.taskId!);
-      if (existingTask != null &&
-          (existingTask.status == DownloadStatus.downloading ||
-              existingTask.status == DownloadStatus.completed)) {
-        return;
-      }
+    final existingTask = downloadManager
+        .getAllTasks()
+        .cast<DownloadTaskPersistent?>()
+        .firstWhere(
+          (task) => task?.url == _currentUrl,
+          orElse: () => null,
+        );
+
+    if (existingTask != null &&
+        (existingTask.isDownloading || existingTask.isFinished)) {
+      return;
     }
 
     // 生成文件名
@@ -692,18 +702,22 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     // 确保有正确的扩展名
     var finalFileName = targetFileName;
     if (!finalFileName.contains('.')) {
-      final isM3u8 = _currentUrl!.toLowerCase().endsWith('.m3u8');
-      finalFileName = '$finalFileName.${isM3u8 ? 'mp4' : 'mp4'}';
+      finalFileName = '$finalFileName.mp4';
     }
 
-    // 开始下载
-    final task = await _downloadService.startDownload(
+    // 确定下载类型（直播或普通视频）
+    final isLiveStream = widget.live || _currentUrl!.contains('live');
+
+    // 使用高级下载管理器添加下载任务
+    final task = await downloadManager.addDownload(
       url: _currentUrl!,
       fileName: finalFileName,
-      headers: _currentHeaders,
+      videoTitle: widget.videoTitle,
       episodeInfo: widget.currentEpisodeIndex != null
           ? 'EP${widget.currentEpisodeIndex}'
           : null,
+      headers: _currentHeaders,
+      type: isLiveStream ? DownloadTaskType.liveStream : DownloadTaskType.video,
     );
 
     if (task != null) {
@@ -715,32 +729,37 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       );
 
       // 添加监听器
-      _downloadService.addListener(task.id, _onDownloadTaskUpdate);
+      downloadManager.getTaskProgressStream(task.id)?.listen(
+            (event) => _onAdvancedDownloadProgress(event),
+          );
     }
   }
 
-  void _onDownloadTaskUpdate(DownloadTask task) {
+  /// 处理高级下载管理器的进度更新
+  void _onAdvancedDownloadProgress(DownloadTaskProgressEvent event) {
     if (!mounted) return;
 
     VideoDownloadState state;
-    switch (task.status) {
-      case DownloadStatus.waiting:
+    switch (event.status) {
+      case DownloadTaskPersistentStatus.waiting:
         state = VideoDownloadState.idle;
-      case DownloadStatus.downloading:
+      case DownloadTaskPersistentStatus.downloading:
         state = VideoDownloadState.downloading;
-      case DownloadStatus.paused:
+      case DownloadTaskPersistentStatus.paused:
         state = VideoDownloadState.paused;
-      case DownloadStatus.completed:
+      case DownloadTaskPersistentStatus.completed:
+      case DownloadTaskPersistentStatus.saved:
         state = VideoDownloadState.completed;
-      case DownloadStatus.failed:
+      case DownloadTaskPersistentStatus.failed:
         state = VideoDownloadState.failed;
+      case DownloadTaskPersistentStatus.cancelled:
+        state = VideoDownloadState.idle;
     }
 
     _updateDownloadInfo(
       _downloadInfo.copyWith(
         state: state,
-        progress: task.progress,
-        errorMessage: task.errorMessage,
+        progress: event.progress,
       ),
     );
   }
@@ -761,14 +780,9 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       return;
     }
 
-    // 移除监听器
-    _downloadService.removeListener(
-      _downloadInfo.taskId!,
-      _onDownloadTaskUpdate,
-    );
-
-    // 取消下载（会删除临时文件）
-    await _downloadService.cancelDownload(_downloadInfo.taskId!);
+    // 使用高级下载管理器取消下载
+    final downloadManager = AdvancedDownloadManager();
+    await downloadManager.cancelDownload(_downloadInfo.taskId!);
 
     _updateDownloadInfo(const VideoDownloadInfo());
   }
@@ -777,39 +791,31 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
   void _disposeDownload() {
     if (_downloadInfo.taskId == null) return;
 
-    // 移除监听器
-    _downloadService.removeListener(
-      _downloadInfo.taskId!,
-      _onDownloadTaskUpdate,
-    );
-
     // 取消下载（会删除临时文件）- 不等待完成，避免阻塞 dispose
-    unawaited(_downloadService.cancelDownload(_downloadInfo.taskId!));
+    final downloadManager = AdvancedDownloadManager();
+    unawaited(downloadManager.cancelDownload(_downloadInfo.taskId!));
   }
 
   Future<String?> _saveAs() async {
     if (_downloadInfo.taskId == null) return null;
 
-    // 先自动保存到默认位置
-    final autoPath = await _downloadService.autoSave(_downloadInfo.taskId!);
-    if (autoPath == null) return null;
+    // 使用高级下载管理器保存
+    final downloadManager = AdvancedDownloadManager();
+    final task = downloadManager.getTask(_downloadInfo.taskId!);
+    if (task == null) return null;
 
     _updateDownloadInfo(
-      _downloadInfo.copyWith(filePath: autoPath),
+      _downloadInfo.copyWith(filePath: task.filePath),
     );
 
-    // 然后让用户选择另存为位置（桌面端）或保存到相册（移动端）
-    final userPath = await _downloadService.saveAs(_downloadInfo.taskId!);
-    if (userPath != null) {
-      _updateDownloadInfo(
-        _downloadInfo.copyWith(filePath: userPath),
-      );
-    }
-
     // 保存完成后重置下载状态，允许重新下载
-    _updateDownloadInfo(const VideoDownloadInfo());
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) {
+        _updateDownloadInfo(const VideoDownloadInfo());
+      }
+    });
 
-    return userPath ?? autoPath;
+    return task.filePath;
   }
 
   // 记录应用进入后台前的播放状态

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:selene/screens/admin_panel_screen.dart';
+import 'package:selene/screens/download_manager_screen.dart';
 import 'package:selene/screens/login_screen.dart';
 import 'package:selene/services/douban_cache_service.dart';
 import 'package:selene/services/live_service.dart';
@@ -229,6 +230,16 @@ class _UserMenuState extends State<UserMenu> {
       MaterialPageRoute<void>(
         builder: (BuildContext context) => const AdminPanelScreen(),
         fullscreenDialog: true,
+      ),
+    );
+  }
+
+  Future<void> _handleOpenDownloadManager() async {
+    final navigator = Navigator.of(context, rootNavigator: true);
+    widget.onClose?.call();
+    await navigator.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext context) => const DownloadManagerScreen(),
       ),
     );
   }
@@ -890,6 +901,48 @@ class _UserMenuState extends State<UserMenu> {
                         ),
                       ],
                     ],
+                    // 分割线
+                    Container(
+                      height: 1,
+                      color: widget.isDarkMode
+                          ? const Color(0xFF374151)
+                          : const Color(0xFFe5e7eb),
+                    ),
+                    // 下载管理按钮
+                    Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () => _handleOpenDownloadManager(),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 10,
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                LucideIcons.downloadCloud,
+                                size: 20,
+                                color: widget.isDarkMode
+                                    ? const Color(0xFF3b82f6)
+                                    : const Color(0xFF3b82f6),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                '下载管理',
+                                style: FontUtils.poppins(
+                                  fontSize: 16,
+                                  color: widget.isDarkMode
+                                      ? const Color(0xFFffffff)
+                                      : const Color(0xFF1f2937),
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                     // 分割线
                     Container(
                       height: 1,

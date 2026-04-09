@@ -1,6 +1,7 @@
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:selene/models/speed_test_cache.dart';
 import 'package:selene/utils/hive_adapters.dart';
+import 'package:selene/utils/hive_adapters_download.dart';
 
 /// Hive 初始化器
 /// 用于初始化 Hive 数据库和注册适配器
@@ -15,6 +16,7 @@ class HiveInitializer {
     Hive.registerAdapter(FavoriteItemAdapter());
     Hive.registerAdapter(SearchResourceAdapter());
     Hive.registerAdapter(SpeedTestCacheGroupAdapter());
+    Hive.registerAdapter(DownloadTaskPersistentAdapter());
     // 打开本地模式数据盒子
     await Hive.openBox<dynamic>('user_data');
     await Hive.openBox<String>('version_data');

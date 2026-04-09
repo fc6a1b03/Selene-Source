@@ -66,3 +66,11 @@
 -keepattributes Exceptions
 -keepattributes InnerClasses
 -keepattributes EnclosingMethod
+
+# === flutter_local_notifications ===
+-keep class com.dexterous.flutterlocalnotifications.** { *; }
+-keep class android.app.NotificationChannel
+-keep class android.app.Notification$Builder
+-keep class androidx.core.app.NotificationCompat$Builder
+-keep class androidx.core.app.NotificationManagerCompat
+-dontwarn com.dexterous.flutterlocalnotifications.**

@@ -14,6 +14,7 @@ android {
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.toVersion(libs.versions.java.get())
         targetCompatibility = JavaVersion.toVersion(libs.versions.java.get())
     }
@@ -23,8 +24,9 @@ android {
             if (hasProperty("android")) {
                 extensions.configure<com.android.build.gradle.BaseExtension> {
                     compileOptions {
-                        sourceCompatibility = JavaVersion.VERSION_17
-                        targetCompatibility = JavaVersion.VERSION_17
+                        isCoreLibraryDesugaringEnabled = true
+                        sourceCompatibility = JavaVersion.toVersion(libs.versions.java.get())
+                        targetCompatibility = JavaVersion.toVersion(libs.versions.java.get())
                     }
                 }
                 tasks.withType<JavaCompile> {
@@ -119,6 +121,7 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.android.usb.camera.libuvc)
     implementation(libs.android.usb.camera.libusbc)
+    coreLibraryDesugaring(libs.android.desugar.jdk.libs)
 }
 
 flutter {
