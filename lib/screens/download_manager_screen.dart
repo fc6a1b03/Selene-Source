@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 import 'package:selene/design/design_system.dart';
 import 'package:selene/models/download_task_persistent.dart';
+import 'package:selene/screens/player_screen.dart';
 import 'package:selene/services/advanced_download_manager.dart';
 import 'package:selene/services/background_download_service.dart';
 import 'package:selene/utils/font_utils.dart';
@@ -328,31 +329,16 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen>
             return _DownloadTaskCard(
               key: ValueKey(task.id),
               task: task,
-              onPause: () {
-                debugPrint('[UI] 暂停任务: ${task.id} - ${task.fileName}');
-                manager.pauseDownload(task.id);
-              },
-              onResume: () {
-                debugPrint('[UI] 恢复任务: ${task.id} - ${task.fileName}');
-                manager.resumeDownload(task.id);
-              },
-              onCancel: () {
-                debugPrint('[UI] 取消任务: ${task.id} - ${task.fileName}');
-                manager.cancelDownload(task.id);
-              },
-              onDelete: () {
-                debugPrint('[UI] 删除任务: ${task.id} - ${task.fileName}');
-                manager.deleteTask(task.id);
-              },
-              onRetry: () {
-                debugPrint('[UI] 重试任务: ${task.id} - ${task.fileName}');
-                manager.retryTask(task.id);
-              },
+              onPause: () => manager.pauseDownload(task.id),
+              onResume: () => manager.resumeDownload(task.id),
+              onCancel: () => manager.cancelDownload(task.id),
+              onDelete: () => manager.deleteTask(task.id),
+              onRetry: () => manager.retryTask(task.id),
               onSave: task.isLiveStream
-                  ? () {
-                      debugPrint('[UI] 保存直播: ${task.id} - ${task.fileName}');
-                      manager.saveLiveStream(task.id);
-                    }
+                  ? () => manager.saveLiveStream(task.id)
+                  : null,
+              onPlay: task.isFinished
+                  ? () => _playDownloadedVideo(context, task)
                   : null,
             );
           },
@@ -511,6 +497,7 @@ class _DownloadTaskCard extends StatefulWidget {
   final VoidCallback onDelete;
   final VoidCallback onRetry;
   final VoidCallback? onSave;
+  final VoidCallback? onPlay;
 
   const _DownloadTaskCard({
     super.key,
@@ -521,6 +508,7 @@ class _DownloadTaskCard extends StatefulWidget {
     required this.onDelete,
     required this.onRetry,
     this.onSave,
+    this.onPlay,
   });
 
   @override
@@ -530,13 +518,13 @@ class _DownloadTaskCard extends StatefulWidget {
 class _DownloadTaskCardState extends State<_DownloadTaskCard> {
   StreamSubscription<DownloadTaskProgressEvent>? _progressSubscription;
   DownloadTaskProgressEvent? _latestProgress;
-  bool _isProcessing = false; // 防重复点击标志
+
+  // 使用独立的处理状态标志，每个动作有自己的标志
+  final Map<String, bool> _actionProcessing = {};
 
   @override
   void initState() {
     super.initState();
-    debugPrint(
-        '[DownloadTaskCard] initState: ${widget.task.id} - ${widget.task.fileName}');
     _subscribeToProgress();
     // 初始化后台下载服务并显示通知
     _initBackgroundService();
@@ -557,11 +545,9 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
     super.didUpdateWidget(oldWidget);
     // 只有当任务ID变化时才重新订阅
     if (oldWidget.task.id != widget.task.id) {
-      debugPrint(
-          '[DownloadTaskCard] didUpdateWidget: 任务ID变化 ${oldWidget.task.id} -> ${widget.task.id}');
-      debugPrint(
-          '[DownloadTaskCard] 新任务: ${widget.task.fileName}, 状态: ${widget.task.status}');
       _progressSubscription?.cancel();
+      _latestProgress = null;
+      _actionProcessing.clear();
       _subscribeToProgress();
     }
     // 状态变化时更新通知
@@ -602,16 +588,14 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
   }
 
   /// 包装回调，防止重复点击和越权操作
-  /// 责任单一：每个按钮只做一件事
+  /// 每个动作有独立的处理标志，避免相互影响
   VoidCallback? _wrapCallback(VoidCallback? callback,
       {required String action}) {
     if (callback == null) return null;
-    return () {
-      debugPrint(
-          '[DownloadTaskCard] 按钮点击: $action, 任务: ${widget.task.id} - ${widget.task.fileName}');
 
-      // 防重复点击
-      if (_isProcessing) {
+    return () {
+      // 防重复点击 - 每个动作独立判断
+      if (_actionProcessing[action] == true) {
         debugPrint('[DownloadTaskCard] 操作过于频繁，忽略: $action');
         return;
       }
@@ -623,16 +607,16 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
         return;
       }
 
-      setState(() => _isProcessing = true);
+      // 设置处理标志
+      setState(() => _actionProcessing[action] = true);
 
       // 执行操作
-      debugPrint('[DownloadTaskCard] 执行回调: $action');
       callback();
 
       // 延迟重置处理标志
-      Future.delayed(const Duration(milliseconds: 300), () {
+      Future.delayed(const Duration(milliseconds: 500), () {
         if (mounted) {
-          setState(() => _isProcessing = false);
+          setState(() => _actionProcessing[action] = false);
         }
       });
     };
@@ -640,29 +624,35 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
 
   /// 验证操作是否合法
   bool _isActionValid(String action) {
+    // 每次都从 widget.task 读取最新状态
+    final task = widget.task;
     switch (action) {
       case 'pause':
-        return widget.task.canPause;
+        return task.canPause;
       case 'resume':
-        return widget.task.canResume;
+        return task.canResume;
       case 'cancel':
-        return widget.task.status == DownloadTaskPersistentStatus.downloading;
+        return task.status == DownloadTaskPersistentStatus.downloading;
       case 'delete':
-        return widget.task.canDelete;
+        return task.canDelete;
       case 'retry':
-        return widget.task.status == DownloadTaskPersistentStatus.failed;
+        return task.status == DownloadTaskPersistentStatus.failed;
       case 'save':
-        return widget.task.isLiveStream && widget.task.isDownloading;
+        return task.isLiveStream && task.isDownloading;
+      case 'play':
+        return task.isFinished && File(task.filePath).existsSync();
       default:
         return true;
     }
   }
 
+  /// 获取指定动作的处理状态
+  bool _isProcessing(String action) => _actionProcessing[action] == true;
+
   @override
   void dispose() {
-    debugPrint(
-        '[DownloadTaskCard] dispose: ${widget.task.id} - ${widget.task.fileName}');
     _progressSubscription?.cancel();
+    _actionProcessing.clear();
     super.dispose();
   }
 
@@ -928,7 +918,7 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
           label: '终止并保存',
           color: Colors.orange,
           onTap: _wrapCallback(widget.onSave, action: 'save'),
-          isEnabled: !_isProcessing,
+          isEnabled: !_isProcessing('save'),
         ),
       );
     } else if (task.canPause) {
@@ -939,7 +929,7 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
           label: '暂停',
           color: AppColors.primary,
           onTap: _wrapCallback(widget.onPause, action: 'pause'),
-          isEnabled: !_isProcessing,
+          isEnabled: !_isProcessing('pause'),
         ),
       );
     } else if (task.canResume) {
@@ -950,7 +940,7 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
           label: '继续',
           color: AppColors.primary,
           onTap: _wrapCallback(widget.onResume, action: 'resume'),
-          isEnabled: !_isProcessing,
+          isEnabled: !_isProcessing('resume'),
         ),
       );
     } else if (task.status == DownloadTaskPersistentStatus.failed) {
@@ -961,7 +951,18 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
           label: '重试',
           color: Colors.orange,
           onTap: _wrapCallback(widget.onRetry, action: 'retry'),
-          isEnabled: !_isProcessing,
+          isEnabled: !_isProcessing('retry'),
+        ),
+      );
+    } else if (task.isFinished && widget.onPlay != null) {
+      // 已完成 - 显示播放按钮
+      buttons.add(
+        _ActionButton(
+          icon: LucideIcons.play,
+          label: '播放',
+          color: AppColors.primary,
+          onTap: _wrapCallback(widget.onPlay, action: 'play'),
+          isEnabled: !_isProcessing('play'),
         ),
       );
     }
@@ -975,7 +976,7 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
           label: '取消',
           color: Colors.red,
           onTap: _wrapCallback(widget.onCancel, action: 'cancel'),
-          isEnabled: !_isProcessing,
+          isEnabled: !_isProcessing('cancel'),
         ),
       );
     } else if (task.canDelete) {
@@ -987,7 +988,7 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
           label: '删除',
           color: Colors.red,
           onTap: _wrapCallback(widget.onDelete, action: 'delete'),
-          isEnabled: !_isProcessing,
+          isEnabled: !_isProcessing('delete'),
         ),
       );
     }
@@ -1002,6 +1003,29 @@ class _DownloadTaskCardState extends State<_DownloadTaskCard> {
         ..removeLast(),
     );
   }
+}
+
+// 播放下载的视频 - 定义在 State 类中
+void _playDownloadedVideo(BuildContext context, DownloadTaskPersistent task) {
+  final file = File(task.filePath);
+  if (!file.existsSync()) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('文件不存在: ${task.fileName}'),
+        backgroundColor: Colors.red,
+      ),
+    );
+    return;
+  }
+
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (context) => PlayerScreen(
+        title: task.videoTitle ?? task.fileName,
+        stitle: task.filePath, // 使用本地文件路径
+      ),
+    ),
+  );
 }
 
 /// 操作按钮

@@ -361,10 +361,8 @@ class _VideoPlayerWidgetOptimizedState extends State<VideoPlayerWidgetOptimized>
       _currentHeaders = headers;
     }
 
-    // 取消之前的下载
-    await _cancelDownload();
-
-    // 重置下载状态
+    // 注意：切换视频时不自动取消下载，让之前的下载在后台继续
+    // 只重置当前下载状态显示
     _updateDownloadInfo(const VideoDownloadInfo());
 
     if (_player == null) {
@@ -512,8 +510,7 @@ class _VideoPlayerWidgetOptimizedState extends State<VideoPlayerWidgetOptimized>
   Future<void> _externalDispose() async {
     if (!mounted || _playerDisposed) return;
 
-    // 取消下载
-    await _cancelDownload();
+    // 注意：不要在播放器 dispose 时取消下载，让下载在后台继续
 
     if ((Platform.isAndroid || Platform.isIOS) && _pipObserver != null) {
       try {
@@ -651,7 +648,16 @@ class _VideoPlayerWidgetOptimizedState extends State<VideoPlayerWidgetOptimized>
 
   Future<void> _resumeDownload() async {
     if (_downloadInfo.taskId == null) return;
-    await _downloadService.resumeDownload(_downloadInfo.taskId!);
+    // 获取任务信息并使用新 API 继续下载
+    final task = _downloadService.getTask(_downloadInfo.taskId!);
+    if (task == null) return;
+    await _downloadService.resumeDownload(
+      taskId: _downloadInfo.taskId!,
+      url: task.url,
+      tempFilePath: task.tempFilePath,
+      isM3u8: task.isM3u8,
+      headers: _currentHeaders,
+    );
   }
 
   Future<void> _cancelDownload() async {
@@ -671,14 +677,11 @@ class _VideoPlayerWidgetOptimizedState extends State<VideoPlayerWidgetOptimized>
   }
 
   void _disposeDownload() {
-    // 取消订阅
+    // 取消订阅，但保留后台下载继续运行
     _downloadSubscription?.cancel();
     _downloadSubscription = null;
 
-    // 取消下载（不等待完成，避免阻塞 dispose）
-    if (_downloadInfo.taskId != null) {
-      unawaited(_downloadService.cancelDownload(_downloadInfo.taskId!));
-    }
+    // 注意：不要在播放器 dispose 时取消下载，让下载在后台继续
   }
 
   Future<String?> _saveAs() async {

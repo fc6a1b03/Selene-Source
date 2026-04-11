@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -109,6 +110,10 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
   // 截图服务
   final ScreenshotService _screenshotService = ScreenshotService();
   bool _isCapturingScreenshot = false;
+
+  // 下载按钮动画状态
+  final Set<String> _downloadingUrls = {}; // 正在处理下载的URL集合
+  final GlobalKey _downloadButtonKey = GlobalKey(); // 下载按钮的key，用于获取位置
 
   @override
   void initState() {
@@ -671,75 +676,130 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
   Future<void> _handleDownloadTap() async {
     _onUserInteraction();
 
-    final info = widget.downloadInfo;
+    // 防重复点击：如果当前URL正在处理中，则忽略
+    if (_isDownloadProcessing()) {
+      return;
+    }
 
-    switch (info.state) {
-      case VideoDownloadState.idle:
-      case VideoDownloadState.failed:
-        // 开始下载
-        await widget.onStartDownload();
-        break;
-      case VideoDownloadState.downloading:
-        // 取消下载
-        await widget.onCancelDownload();
-        break;
-      case VideoDownloadState.paused:
-        // 恢复下载（移动端先取消重新下载）
-        await widget.onCancelDownload();
-        break;
-      case VideoDownloadState.completed:
-        // 另存为（移动端保存到相册）
-        try {
-          final path = await widget.onSaveAs();
-          if (path != null && mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('视频已保存到相册'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        } catch (e) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('保存失败: $e'),
-                duration: const Duration(seconds: 3),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
+    // 标记当前URL正在处理
+    setState(() {
+      _downloadingUrls.add(widget.videoUrl);
+    });
+
+    // 播放飞行动画
+    _playDownloadAnimation();
+
+    try {
+      // 开始下载
+      await widget.onStartDownload();
+    } finally {
+      // 延迟后移除处理标记，允许再次点击（防抖动）
+      Future.delayed(const Duration(milliseconds: 800), () {
+        if (mounted) {
+          setState(() {
+            _downloadingUrls.remove(widget.videoUrl);
+          });
         }
-        break;
+      });
     }
   }
 
-  IconData _getDownloadIcon() {
-    switch (widget.downloadInfo.state) {
-      case VideoDownloadState.idle:
-      case VideoDownloadState.failed:
-        return Icons.download;
-      case VideoDownloadState.downloading:
-        return Icons.close;
-      case VideoDownloadState.paused:
-        return Icons.play_arrow;
-      case VideoDownloadState.completed:
-        return Icons.save_alt;
-    }
-  }
+  /// 播放下载飞行动画 - 光圈从按钮飞到下载浮动窗
+  void _playDownloadAnimation() {
+    final overlay = Overlay.of(context);
+    final renderBox =
+        _downloadButtonKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox == null) return;
 
-  Color _getDownloadColor() {
-    switch (widget.downloadInfo.state) {
-      case VideoDownloadState.idle:
-      case VideoDownloadState.failed:
-        return Colors.white;
-      case VideoDownloadState.downloading:
-        return Colors.orange;
-      case VideoDownloadState.paused:
-        return Colors.yellow;
-      case VideoDownloadState.completed:
-        return Colors.green;
-    }
+    // 获取按钮在屏幕上的位置
+    final buttonPosition = renderBox.localToGlobal(Offset.zero);
+    final buttonSize = renderBox.size;
+    final startX = buttonPosition.dx + buttonSize.width / 2;
+    final startY = buttonPosition.dy + buttonSize.height / 2;
+
+    // 计算目标位置（浮动窗位置 - 右下角）
+    final screenSize = MediaQuery.of(context).size;
+    final padding = MediaQuery.of(context).padding;
+    final endX = screenSize.width - 40; // 浮动窗中心大致位置
+    final endY = screenSize.height - 100 - padding.bottom; // 浮动窗中心大致位置
+
+    // 创建动画控制器
+    final animationController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: Navigator.of(context),
+    );
+
+    // 创建动画图层
+    final overlayEntry = OverlayEntry(
+      builder: (context) => AnimatedBuilder(
+        animation: animationController,
+        builder: (context, child) {
+          final progress = animationController.value;
+
+          // 贝塞尔曲线路径计算
+          final currentX = startX + (endX - startX) * progress;
+          final currentY = startY +
+              (endY - startY) * progress -
+              100 * math.sin(progress * math.pi); // 抛物线效果
+
+          // 缩放动画：从小到大再缩小
+          final scale = progress < 0.5
+              ? 0.5 + progress // 0.5 -> 1.0
+              : 1.0 - (progress - 0.5) * 1.5; // 1.0 -> 0.25
+
+          // 透明度动画
+          final opacity = progress < 0.8 ? 1.0 : 1.0 - (progress - 0.8) * 5;
+
+          return Positioned(
+            left: currentX - 12,
+            top: currentY - 12,
+            child: Opacity(
+              opacity: opacity,
+              child: Transform.scale(
+                scale: scale.clamp(0.2, 1.0),
+                child: Container(
+                  width: 24,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(
+                      colors: [Colors.cyan, Colors.blue],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.cyan.withValues(alpha: 0.5),
+                        blurRadius: 8,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.download,
+                    color: Colors.white,
+                    size: 14,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    // 插入图层并播放动画
+    overlay.insert(overlayEntry);
+
+    animationController.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        overlayEntry.remove();
+        animationController.dispose();
+      }
+    });
+
+    // 使用弹性动画
+    animationController.forward();
   }
 
   @override
@@ -1207,9 +1267,8 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
     // 直播模式不显示下载按钮
     if (widget.live) return const SizedBox.shrink();
 
-    final info = widget.downloadInfo;
-    final isDownloading = info.state == VideoDownloadState.downloading;
     final iconSize = _isFullscreen ? 24.0 : 20.0;
+    final isProcessing = _isDownloadProcessing();
 
     return Positioned(
       top: _isFullscreen ? 8 : 4,
@@ -1218,29 +1277,30 @@ class _MobilePlayerControlsState extends State<MobilePlayerControls> {
         opacity: (_controlsVisible && !_isLocked) ? 1.0 : 0.0,
         duration: const Duration(milliseconds: 200),
         child: IgnorePointer(
-          ignoring: !_controlsVisible || _isLocked,
+          ignoring: !_controlsVisible || _isLocked || isProcessing,
           child: GestureDetector(
+            key: _downloadButtonKey,
             onTap: _handleDownloadTap,
             behavior: HitTestBehavior.opaque,
-            // 统一使用与投屏按钮相同的 Container + padding 结构
             child: Container(
               padding: const EdgeInsets.all(8),
-              child: isDownloading
-                  ? _DownloadProgressWithCancel(
-                      progress: info.progress,
-                      size: iconSize,
-                      onCancel: widget.onCancelDownload,
-                    )
-                  : Icon(
-                      _getDownloadIcon(),
-                      color: _getDownloadColor(),
-                      size: iconSize,
-                    ),
+              child: Icon(
+                Icons.download,
+                color: isProcessing
+                    ? Colors.white.withValues(alpha: 0.5)
+                    : Colors.white,
+                size: iconSize,
+              ),
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// 检查当前视频的下载是否正在处理中
+  bool _isDownloadProcessing() {
+    return _downloadingUrls.contains(widget.videoUrl);
   }
 
   Widget _buildCenterPlayPause() {

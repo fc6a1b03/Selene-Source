@@ -527,29 +527,50 @@ class DownloadFloatingWindowController extends ChangeNotifier {
   Future<void> toggleAllDownloads() async {
     final manager = AdvancedDownloadManager();
 
+    // 创建任务列表副本，避免迭代过程中列表被修改
+    final tasksToProcess = List<DownloadTaskPersistent>.from(_activeTasks);
+
     debugPrint(
-        '[浮窗] toggleAllDownloads: isAllPaused=$isAllPaused, 任务数=${_activeTasks.length}');
+        '[浮窗] toggleAllDownloads: isAllPaused=$isAllPaused, 任务数=${tasksToProcess.length}');
 
     if (isAllPaused) {
-      // 继续所有暂停的任务
-      for (final task in _activeTasks) {
+      // 继续所有暂停的任务（并行启动，不互相阻塞）
+      final futures = <Future<void>>[];
+      for (final task in tasksToProcess) {
         if (task.canResume) {
-          debugPrint('[浮窗] 恢复任务: ${task.id} - ${task.fileName}');
-          await manager.resumeDownload(task.id);
+          debugPrint('[浮窗] 启动恢复任务: ${task.id} - ${task.fileName}');
+          futures.add(
+            manager.resumeDownload(task.id).catchError((Object e) {
+              debugPrint('[浮窗] 恢复任务失败: ${task.id}, 错误: $e');
+            }),
+          );
         }
       }
+      // 等待所有恢复操作完成（带超时）
+      await Future.wait(futures).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint('[浮窗] 批量恢复任务超时');
+          return <void>[];
+        },
+      );
     } else {
-      // 暂停所有下载中的任务
-      for (final task in _activeTasks) {
+      // 暂停所有下载中的任务（并行）
+      final futures = <Future<void>>[];
+      for (final task in tasksToProcess) {
         if (task.canPause) {
           debugPrint('[浮窗] 暂停任务: ${task.id} - ${task.fileName}');
-          await manager.pauseDownload(task.id);
+          futures.add(
+            manager.pauseDownload(task.id).catchError((Object e) {
+              debugPrint('[浮窗] 暂停任务失败: ${task.id}, 错误: $e');
+            }),
+          );
         }
       }
+      await Future.wait(futures);
     }
 
     // 延迟刷新任务列表，等待 Isolate 处理完成并更新状态
-    // 避免状态竞争导致 UI 显示错误
     Future.delayed(const Duration(milliseconds: 500), () {
       _updateActiveTasks();
     });

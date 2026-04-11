@@ -2,6 +2,7 @@ import 'package:bitsdojo_window/bitsdojo_window.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:selene/design/design_system.dart';
+import 'package:selene/services/advanced_download_manager.dart';
 import 'package:selene/services/theme_service.dart';
 
 /// Windows 无边框标题栏
@@ -16,6 +17,59 @@ class WindowsTitleBar extends StatelessWidget {
     this.forceBlack = false,
     this.customBackgroundColor,
   });
+
+  /// 处理关闭按钮点击
+  void _handleClose(BuildContext context) async {
+    // 检查是否有正在下载的任务
+    final downloadManager = AdvancedDownloadManager();
+    final activeTasks = downloadManager.activeTasks;
+    final bool hasActiveDownloads = activeTasks.isNotEmpty;
+
+    // 显示确认对话框
+    final bool? shouldClose = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        title: Row(
+          children: [
+            Icon(
+              Icons.exit_to_app,
+              color: Theme.of(context).primaryColor,
+            ),
+            const SizedBox(width: 12),
+            const Text('确认关闭'),
+          ],
+        ),
+        content: Text(
+          hasActiveDownloads
+              ? '有 ${activeTasks.length} 个下载任务正在进行中，关闭应用将会暂停这些任务。\n\n确定要关闭应用吗？'
+              : '确定要关闭应用吗？',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldClose == true) {
+      appWindow.close();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +95,7 @@ class WindowsTitleBar extends StatelessWidget {
                 ),
               ),
               // 右侧窗口控制按钮组
-              _buildWindowControls(foregroundColor, isDark),
+              _buildWindowControls(context, foregroundColor, isDark),
             ],
           ),
         );
@@ -49,7 +103,8 @@ class WindowsTitleBar extends StatelessWidget {
     );
   }
 
-  Widget _buildWindowControls(Color foregroundColor, bool isDark) {
+  Widget _buildWindowControls(
+      BuildContext context, Color foregroundColor, bool isDark) {
     return Container(
       margin: const EdgeInsets.only(right: 8, top: 4, bottom: 4),
       decoration: BoxDecoration(
@@ -77,7 +132,7 @@ class WindowsTitleBar extends StatelessWidget {
             isDark: isDark,
           ),
           _WindowControlButton(
-            onPressed: () => appWindow.close(),
+            onPressed: () => _handleClose(context),
             icon: Icon(Icons.close, size: 14, color: foregroundColor),
             isDark: isDark,
             isCloseButton: true,

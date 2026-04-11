@@ -222,30 +222,48 @@ class HighPerformanceDownloadService {
       StreamController<_DownloadMessage>.broadcast();
 
   bool _isInitialized = false;
+  bool _isInitializing = false;
+  bool _receivePortHasListener = false;
   final _initCompleter = Completer<void>();
 
   /// 初始化服务（自动在第一次使用时调用）
   Future<void> _initialize() async {
     if (_isInitialized) return;
-    if (_initCompleter.isCompleted) return _initCompleter.future;
+    if (_isInitializing) return _initCompleter.future;
+
+    _isInitializing = true;
+    // 初始化 Isolate（日志仅在错误时输出）
 
     try {
-      // 监听来自 Isolate 的消息
-      _mainReceivePort.listen(_handleIsolateMessage);
+      // 监听来自 Isolate 的消息（只监听一次）
+      if (!_receivePortHasListener) {
+        _mainReceivePort.listen(_handleIsolateMessage);
+        _receivePortHasListener = true;
+      }
 
-      // 启动下载 Isolate
-      _isolate = await Isolate.spawn(
-        _downloadIsolateEntry,
-        _mainReceivePort.sendPort,
-        debugName: 'DownloadIsolate',
-      );
+      // 启动下载 Isolate（如果还没启动）
+      if (_isolate == null) {
+        // 启动 Isolate
+        _isolate = await Isolate.spawn(
+          _downloadIsolateEntry,
+          _mainReceivePort.sendPort,
+          debugName: 'DownloadIsolate',
+        );
+      }
 
       // 等待 Isolate 初始化完成
+      // 等待 Isolate 就绪
       await _initCompleter.future;
       _isInitialized = true;
+      _isInitializing = false;
+      // Isolate 初始化完成
     } catch (e) {
-      _initCompleter.completeError(e);
-      rethrow;
+      debugPrint('[下载] Isolate 初始化失败');
+      if (!_initCompleter.isCompleted) {
+        _initCompleter.completeError(e);
+      }
+      // 重置状态，允许重试
+      _isInitializing = false;
     }
   }
 
@@ -295,16 +313,24 @@ class HighPerformanceDownloadService {
     // 通知进度监听器（控制器生命周期由服务管理）
     // ignore: close_sinks
     final controller = _progressControllers[message.taskId];
-    if (controller != null && !controller.isClosed) {
-      controller.add(DownloadProgressEvent(
-        taskId: message.taskId,
-        progress: message.progress,
-        downloadedBytes: message.downloadedBytes,
-        totalBytes: message.totalBytes,
-        status: status,
-        errorMessage: message.errorMessage,
-      ));
+    if (controller == null) {
+      // 无进度控制器
+      return;
     }
+    if (controller.isClosed) {
+      // 控制器已关闭
+      return;
+    }
+
+    // 发送进度到 UI
+    controller.add(DownloadProgressEvent(
+      taskId: message.taskId,
+      progress: message.progress,
+      downloadedBytes: message.downloadedBytes,
+      totalBytes: message.totalBytes,
+      status: status,
+      errorMessage: message.errorMessage,
+    ));
   }
 
   /// 生成任务 ID
@@ -312,6 +338,15 @@ class HighPerformanceDownloadService {
     final hash = url.hashCode.abs().toRadixString(36);
     final timestamp = DateTime.now().millisecondsSinceEpoch.toRadixString(36);
     return '${hash}_$timestamp';
+  }
+
+  /// 判断 URL 是否为 M3U8 格式
+  bool _isM3u8Url(String url) {
+    final lowerUrl = url.toLowerCase();
+    // 检查是否包含 .m3u8（包括带查询参数的情况）
+    return lowerUrl.contains('.m3u8') ||
+        // 或者内容类型为 application/vnd.apple.mpegurl
+        lowerUrl.contains('mpegurl');
   }
 
   /// 获取下载目录
@@ -340,7 +375,7 @@ class HighPerformanceDownloadService {
 
     dir ??= await getApplicationDocumentsDirectory();
 
-    final moonTVDir = Directory('${dir.path}/MoonTV');
+    final moonTVDir = Directory(path.join(dir.path, 'MoonTV'));
     if (!moonTVDir.existsSync()) {
       await moonTVDir.create(recursive: true);
     }
@@ -350,7 +385,8 @@ class HighPerformanceDownloadService {
   /// 获取临时目录
   Future<Directory> _getTempDirectory() async {
     final tempDir = await getTemporaryDirectory();
-    final downloadTempDir = Directory('${tempDir.path}/selene_downloads');
+    final downloadTempDir =
+        Directory(path.join(tempDir.path, 'selene_downloads'));
     if (!downloadTempDir.existsSync()) {
       await downloadTempDir.create(recursive: true);
     }
@@ -358,11 +394,14 @@ class HighPerformanceDownloadService {
   }
 
   /// 开始下载
+  ///
+  /// [externalTaskId] 外部传入的任务ID，用于与 AdvancedDownloadManager 保持一致
   Future<DownloadTask?> startDownload({
     required String url,
     required String fileName,
     Map<String, String>? headers,
     String? episodeInfo,
+    String? externalTaskId, // 外部任务ID
   }) async {
     await _initialize();
 
@@ -373,10 +412,24 @@ class HighPerformanceDownloadService {
           existingTask.status == DownloadStatus.completed) {
         return existingTask;
       }
+      // 如果任务已存在但不是下载中/已完成，先清理旧任务
+      await _cleanupTask(existingTask.id);
     }
 
     try {
-      final taskId = _generateTaskId(url);
+      // 确保 Isolate 完全初始化（带超时）
+      await _initCompleter.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw Exception('Isolate 初始化超时'),
+      );
+
+      if (_isolateSendPort == null) {
+        debugPrint('错误: Isolate 未初始化');
+        return null;
+      }
+
+      // 使用外部传入的 taskId（如果有），否则生成新的
+      final taskId = externalTaskId ?? _generateTaskId(url);
       final dir = await _getDownloadDirectory();
       final tempDir = await _getTempDirectory();
 
@@ -395,9 +448,9 @@ class HighPerformanceDownloadService {
         finalName = '${base.trim()}-$episodeInfo$ext';
       }
 
-      final filePath = '${dir.path}/$finalName';
-      final tempFilePath = '${tempDir.path}/${taskId}_$finalName';
-      final isM3u8 = url.toLowerCase().endsWith('.m3u8');
+      final filePath = path.join(dir.path, finalName);
+      final tempFilePath = path.join(tempDir.path, '${taskId}_$finalName');
+      final isM3u8 = _isM3u8Url(url);
 
       final task = DownloadTask(
         id: taskId,
@@ -417,7 +470,7 @@ class HighPerformanceDownloadService {
       _progressControllers[taskId] = progressController;
 
       // 发送下载命令到 Isolate
-      _isolateSendPort?.send(_DownloadCommand(
+      _isolateSendPort!.send(_DownloadCommand(
         type: 'start',
         taskId: taskId,
         data: {
@@ -461,14 +514,116 @@ class HighPerformanceDownloadService {
   Future<void> pauseDownload(String taskId) async {
     if (!_tasks.containsKey(taskId)) return;
 
-    _isolateSendPort?.send(_DownloadCommand(
+    // 确保 Isolate 已初始化
+    if (_isolateSendPort == null) return;
+
+    _isolateSendPort!.send(_DownloadCommand(
       type: 'pause',
       taskId: taskId,
     ).toMap());
   }
 
-  /// 恢复下载
-  Future<void> resumeDownload(String taskId) async {
+  /// 恢复下载（新 API，需要完整参数）
+  ///
+  /// 注意：恢复下载需要传入完整的任务信息，因为 Isolate 中的任务可能已被清理
+  Future<void> resumeDownload({
+    required String taskId,
+    required String url,
+    required String tempFilePath,
+    required bool isM3u8,
+    Map<String, String>? headers,
+  }) async {
+    // 恢复下载
+
+    // 先启动 Isolate（如果还没启动）- 不等待，只触发启动
+    unawaited(_initialize());
+
+    // 等待 Isolate 完全初始化（带超时）
+    try {
+      await _initCompleter.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint('[下载] 错误: Isolate 初始化超时');
+          return;
+        },
+      );
+    } catch (e) {
+      debugPrint('[下载] 错误: Isolate 初始化失败');
+      return;
+    }
+
+    if (_isolateSendPort == null) {
+      debugPrint('[下载] 错误: Isolate 未初始化');
+      return;
+    }
+
+    // 如果任务已存在且正在下载，直接返回
+    final existingTask = _tasks[taskId];
+    if (existingTask != null &&
+        existingTask.status == DownloadStatus.downloading) {
+      // 任务已在下载中
+      return;
+    }
+
+    // 如果任务不存在，创建一个（用于应用重启后的恢复）
+    if (existingTask == null) {
+      // 创建新任务
+
+      // 正确处理 Windows 路径，提取文件名
+      // path.basename 对 Windows 反斜杠路径处理不正确，需要手动处理
+      final fileName = tempFilePath.contains('\\')
+          ? tempFilePath.split('\\').last
+          : tempFilePath.split('/').last;
+
+      if (fileName.isEmpty) {
+        debugPrint('[下载] 错误: 无法从路径提取文件名');
+        return;
+      }
+
+      final dir = await _getDownloadDirectory();
+      // 使用平台特定的路径分隔符
+      final separator = Platform.pathSeparator;
+      final filePath = '${dir.path}$separator$fileName';
+
+      // 文件名提取成功
+
+      final task = DownloadTask(
+        id: taskId,
+        url: url,
+        fileName: fileName,
+        filePath: filePath,
+        tempFilePath: tempFilePath,
+        isM3u8: isM3u8,
+      );
+      _tasks[taskId] = task;
+    }
+
+    // 确保进度控制器存在（任务恢复时需要重新创建）
+    // ignore: close_sinks
+    var controller = _progressControllers[taskId];
+    if (controller == null || controller.isClosed) {
+      // 创建/重建进度控制器
+      // ignore: close_sinks
+      controller = StreamController<DownloadProgressEvent>.broadcast();
+      _progressControllers[taskId] = controller;
+    }
+
+    // 发送 resume 命令到 Isolate
+    _isolateSendPort!.send(_DownloadCommand(
+      type: 'resume',
+      taskId: taskId,
+      data: {
+        'url': url,
+        'tempFilePath': tempFilePath,
+        'headers': headers,
+        'isM3u8': isM3u8,
+      },
+    ).toMap());
+  }
+
+  /// 恢复下载（旧 API，仅用于兼容，需要任务已存在）
+  @Deprecated('使用新 API resumeDownload({taskId, url, tempFilePath, isM3u8})')
+  Future<void> resumeDownloadLegacy(String taskId) async {
     if (!_tasks.containsKey(taskId)) return;
 
     final task = _tasks[taskId];
@@ -489,7 +644,14 @@ class HighPerformanceDownloadService {
   Future<void> cancelDownload(String taskId) async {
     if (!_tasks.containsKey(taskId)) return;
 
-    _isolateSendPort?.send(_DownloadCommand(
+    // 确保 Isolate 已初始化
+    if (_isolateSendPort == null) {
+      // Isolate 未初始化，直接清理资源
+      await _cleanupTask(taskId);
+      return;
+    }
+
+    _isolateSendPort!.send(_DownloadCommand(
       type: 'cancel',
       taskId: taskId,
     ).toMap());
@@ -534,13 +696,13 @@ class HighPerformanceDownloadService {
       final dir = await _getDownloadDirectory();
 
       // 处理文件名冲突
-      var targetPath = '${dir.path}/${task.fileName}';
+      var targetPath = path.join(dir.path, task.fileName);
       var counter = 1;
       final ext = path.extension(task.fileName);
       final baseName = path.basenameWithoutExtension(task.fileName);
 
       while (File(targetPath).existsSync()) {
-        targetPath = '${dir.path}/${baseName}_$counter$ext';
+        targetPath = path.join(dir.path, '${baseName}_$counter$ext');
         counter++;
       }
 
@@ -570,13 +732,13 @@ class HighPerformanceDownloadService {
       final dir = await _getDownloadDirectory();
 
       // 处理文件名冲突
-      var targetPath = '${dir.path}/${task.fileName}';
+      var targetPath = path.join(dir.path, task.fileName);
       var counter = 1;
       final ext = path.extension(task.fileName);
       final baseName = path.basenameWithoutExtension(task.fileName);
 
       while (File(targetPath).existsSync()) {
-        targetPath = '${dir.path}/${baseName}_$counter$ext';
+        targetPath = path.join(dir.path, '${baseName}_$counter$ext');
         counter++;
       }
 
@@ -638,18 +800,23 @@ extension on _DownloadCommand {
 ///
 /// 在独立线程中执行，不阻塞 UI
 void _downloadIsolateEntry(SendPort mainSendPort) {
+  print('[Isolate] 启动...');
+
   final receivePort = ReceivePort();
+  print('[Isolate] 发送 SendPort 到主线程');
   mainSendPort.send(receivePort.sendPort);
 
   // 下载任务管理
   final Map<String, _IsolateDownloadTask> tasks = {};
 
+  print('[Isolate] 创建 Dio 实例...');
   // 创建独立的 Dio 实例
   final dio = Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 30),
     receiveTimeout: const Duration(seconds: 30),
     headers: {'User-Agent': 'Mozilla/5.0'},
   ));
+  print('[Isolate] Dio 实例创建完成，开始监听消息');
 
   receivePort.listen((message) async {
     if (message is Map) {
@@ -663,8 +830,8 @@ void _downloadIsolateEntry(SendPort mainSendPort) {
         );
 
         if (command.type.isEmpty || command.taskId.isEmpty) {
-          debugPrint(
-              'Invalid command received: type=${command.type}, taskId=${command.taskId}');
+          print(
+              '[Isolate] Invalid command: type=${command.type}, taskId=${command.taskId}');
           return;
         }
 
@@ -707,12 +874,12 @@ void _downloadIsolateEntry(SendPort mainSendPort) {
             );
             break;
           default:
-            debugPrint('Unknown command type: ${command.type}');
+            print('[Isolate] Unknown command type: ${command.type}');
         }
-      } catch (e, stack) {
+      } catch (e) {
         final taskId = command?.taskId ?? 'unknown';
-        debugPrint(
-            'Error handling command ${command?.type ?? "unknown"}: $e\n$stack');
+        print(
+            '[Isolate] Error handling command ${command?.type ?? "unknown"}: $e');
         // 发送错误消息回主 Isolate
         mainSendPort.send(_DownloadMessage(
           taskId: taskId,
@@ -756,10 +923,15 @@ Future<void> _handleStartDownload({
   required SendPort mainSendPort,
 }) async {
   final data = command.data!;
-  final url = data['url'] as String;
-  final tempFilePath = data['tempFilePath'] as String;
+  final url = data['url'] as String? ?? '';
+  final tempFilePath = data['tempFilePath'] as String? ?? '';
   final headers = data['headers'] as Map<String, dynamic>?;
-  final isM3u8 = data['isM3u8'] as bool;
+  final isM3u8 = data['isM3u8'] as bool? ?? false;
+
+  if (url.isEmpty || tempFilePath.isEmpty) {
+    print('[Isolate] 开始下载失败: url或tempFilePath为空');
+    return;
+  }
 
   final cancelToken = CancelToken();
   final task = _IsolateDownloadTask(
@@ -788,6 +960,7 @@ Future<void> _handleStartDownload({
       );
     }
   } catch (e) {
+    print('[Isolate] 下载错误: $e');
     if (!task.isCancelled && !task.isPaused) {
       mainSendPort.send(_DownloadMessage(
         taskId: command.taskId,
@@ -812,7 +985,13 @@ Future<void> _handlePauseDownload({
   final task = tasks[command.taskId];
   if (task != null) {
     task.isPaused = true;
-    task.cancelToken.cancel();
+
+    // 安全地取消令牌
+    try {
+      if (!task.cancelToken.isCancelled) {
+        task.cancelToken.cancel();
+      }
+    } catch (_) {}
 
     mainSendPort.send(_DownloadMessage(
       taskId: command.taskId,
@@ -832,16 +1011,27 @@ Future<void> _handleResumeDownload({
   required SendPort mainSendPort,
 }) async {
   final data = command.data!;
-  final url = data['url'] as String;
-  final tempFilePath = data['tempFilePath'] as String;
+  final url = data['url'] as String? ?? '';
+  final tempFilePath = data['tempFilePath'] as String? ?? '';
   final headers = data['headers'] as Map<String, dynamic>?;
-  final isM3u8 = data['isM3u8'] as bool;
+  final isM3u8 = data['isM3u8'] as bool? ?? false;
+
+  if (url.isEmpty || tempFilePath.isEmpty) {
+    print('[Isolate] 恢复下载失败: url或tempFilePath为空');
+    return;
+  }
+
+  print(
+      '[Isolate] _handleResumeDownload: url=$url, tempFilePath=$tempFilePath');
 
   // 检查临时文件大小，用于断点续传
   var resumeByte = 0;
   final tempFile = File(tempFilePath);
   if (tempFile.existsSync()) {
     resumeByte = await tempFile.length();
+    print('[Isolate] 临时文件存在，大小: $resumeByte bytes');
+  } else {
+    print('[Isolate] 临时文件不存在，从头开始下载');
   }
 
   final cancelToken = CancelToken();
@@ -857,10 +1047,13 @@ Future<void> _handleResumeDownload({
   tasks[command.taskId] = task;
 
   try {
+    print('[Isolate] 开始下载，isM3u8=$isM3u8');
+
     // 添加 Range header 用于断点续传
     final resumeHeaders = Map<String, dynamic>.from(headers ?? {});
     if (resumeByte > 0) {
       resumeHeaders['Range'] = 'bytes=$resumeByte-';
+      print('[Isolate] 添加 Range header: bytes=$resumeByte-');
     }
 
     if (isM3u8) {
@@ -902,10 +1095,28 @@ Future<void> _downloadRegularFileWithResume({
   required int resumeByte,
   required Map<String, dynamic> headers,
 }) async {
+  print('[Isolate] _downloadRegularFileWithResume: url=${task.url}');
+
+  // 确保临时目录存在
+  final tempFile = File(task.tempFilePath);
+  final parentDir = tempFile.parent;
+  if (!parentDir.existsSync()) {
+    print('[Isolate] 创建临时目录: ${parentDir.path}');
+    await parentDir.create(recursive: true);
+  }
+
+  // 转换 headers 类型
+  final stringHeaders = <String, String>{};
+  headers.forEach((key, value) {
+    stringHeaders[key] = value?.toString() ?? '';
+  });
+
+  print('[Isolate] 发送 HEAD 请求获取文件大小...');
+
   // 获取文件大小
   final headRes = await dio.head<dynamic>(
     task.url,
-    options: Options(headers: headers.cast<String, String>()),
+    options: Options(headers: stringHeaders),
     cancelToken: task.cancelToken,
   );
 
@@ -914,18 +1125,28 @@ Future<void> _downloadRegularFileWithResume({
       ) ??
       0;
 
-  var downloadedBytes = resumeByte;
+  print('[Isolate] 文件大小: $totalBytes bytes');
 
-  // 使用 append 模式打开文件
-  final file = File(task.tempFilePath);
-  final fileSink = file.openWrite(mode: FileMode.append);
+  var downloadedBytes = resumeByte;
+  final actualTotal =
+      totalBytes > 0 ? resumeByte + totalBytes : downloadedBytes;
+
+  // 发送初始进度
+  mainSendPort.send(_DownloadMessage(
+    taskId: task.taskId,
+    progress: actualTotal > 0 ? downloadedBytes / actualTotal : 0.0,
+    downloadedBytes: downloadedBytes,
+    totalBytes: actualTotal,
+    status: 'downloading',
+  ).toMap());
 
   try {
+    // 使用 dio.download 下载文件
     await dio.download(
       task.url,
       task.tempFilePath,
       options: Options(
-        headers: headers.cast<String, String>(),
+        headers: stringHeaders,
         receiveTimeout: const Duration(minutes: 30),
       ),
       cancelToken: task.cancelToken,
@@ -933,30 +1154,38 @@ Future<void> _downloadRegularFileWithResume({
         if (task.isPaused || task.isCancelled) return;
 
         downloadedBytes = resumeByte + received;
-        final actualTotal = total > 0 ? resumeByte + total : downloadedBytes;
-        final progress = actualTotal > 0 ? downloadedBytes / actualTotal : 0.0;
+        final currentTotal = total > 0 ? resumeByte + total : downloadedBytes;
+        final progress =
+            currentTotal > 0 ? downloadedBytes / currentTotal : 0.0;
 
         mainSendPort.send(_DownloadMessage(
           taskId: task.taskId,
           progress: progress,
           downloadedBytes: downloadedBytes,
-          totalBytes: actualTotal,
+          totalBytes: currentTotal,
           status: 'downloading',
         ).toMap());
       },
     );
 
     if (!task.isPaused && !task.isCancelled) {
+      print('[Isolate] 下载完成');
       mainSendPort.send(_DownloadMessage(
         taskId: task.taskId,
         progress: 1.0,
         downloadedBytes: downloadedBytes,
-        totalBytes: totalBytes > 0 ? totalBytes : downloadedBytes,
+        totalBytes: totalBytes > 0 ? resumeByte + totalBytes : downloadedBytes,
         status: 'completed',
       ).toMap());
     }
-  } finally {
-    await fileSink.close();
+  } on DioException catch (e) {
+    // 取消操作是预期的，不发送错误
+    if (e.type == DioExceptionType.cancel) {
+      print('[Isolate] 下载被取消');
+      return;
+    }
+    print('[Isolate] DioException: ${e.type} - ${e.message}');
+    rethrow;
   }
 }
 
@@ -969,7 +1198,13 @@ Future<void> _handleCancelDownload({
   final task = tasks[command.taskId];
   if (task != null) {
     task.isCancelled = true;
-    task.cancelToken.cancel();
+
+    // 安全地取消令牌
+    try {
+      if (!task.cancelToken.isCancelled) {
+        task.cancelToken.cancel();
+      }
+    } catch (_) {}
 
     // 删除临时文件
     final tempFile = File(task.tempFilePath);
@@ -992,7 +1227,13 @@ Future<void> _handleShutdown({
   // 取消所有任务
   for (final task in tasks.values) {
     task.isCancelled = true;
-    task.cancelToken.cancel();
+
+    // 安全地取消令牌
+    try {
+      if (!task.cancelToken.isCancelled) {
+        task.cancelToken.cancel();
+      }
+    } catch (_) {}
 
     // 删除临时文件
     final tempFile = File(task.tempFilePath);
@@ -1020,10 +1261,23 @@ Future<void> _downloadRegularFile({
   required Dio dio,
   required SendPort mainSendPort,
 }) async {
+  // 确保临时目录存在
+  final tempFile = File(task.tempFilePath);
+  final parentDir = tempFile.parent;
+  if (!parentDir.existsSync()) {
+    await parentDir.create(recursive: true);
+  }
+
+  // 转换 headers 类型
+  final stringHeaders = <String, String>{};
+  task.headers?.forEach((key, value) {
+    stringHeaders[key] = value?.toString() ?? '';
+  });
+
   // 获取文件大小
   final headRes = await dio.head<dynamic>(
     task.url,
-    options: Options(headers: task.headers),
+    options: Options(headers: stringHeaders),
     cancelToken: task.cancelToken,
   );
 
@@ -1034,29 +1288,37 @@ Future<void> _downloadRegularFile({
 
   int downloadedBytes = 0;
 
-  await dio.download(
-    task.url,
-    task.tempFilePath,
-    options: Options(
-      headers: task.headers,
-      receiveTimeout: const Duration(minutes: 30),
-    ),
-    cancelToken: task.cancelToken,
-    onReceiveProgress: (received, total) {
-      if (task.isPaused || task.isCancelled) return;
+  try {
+    await dio.download(
+      task.url,
+      task.tempFilePath,
+      options: Options(
+        headers: stringHeaders,
+        receiveTimeout: const Duration(minutes: 30),
+      ),
+      cancelToken: task.cancelToken,
+      onReceiveProgress: (received, total) {
+        if (task.isPaused || task.isCancelled) return;
 
-      downloadedBytes = received;
-      final progress = total > 0 ? received / total : 0.0;
+        downloadedBytes = received;
+        final progress = total > 0 ? received / total : 0.0;
 
-      mainSendPort.send(_DownloadMessage(
-        taskId: task.taskId,
-        progress: progress,
-        downloadedBytes: received,
-        totalBytes: total > 0 ? total : received,
-        status: 'downloading',
-      ).toMap());
-    },
-  );
+        mainSendPort.send(_DownloadMessage(
+          taskId: task.taskId,
+          progress: progress,
+          downloadedBytes: received,
+          totalBytes: total > 0 ? total : received,
+          status: 'downloading',
+        ).toMap());
+      },
+    );
+  } on DioException catch (e) {
+    // 取消操作是预期的，不发送错误
+    if (e.type == DioExceptionType.cancel) {
+      return;
+    }
+    rethrow;
+  }
 
   if (!task.isPaused && !task.isCancelled) {
     mainSendPort.send(_DownloadMessage(
@@ -1111,6 +1373,8 @@ Future<void> _downloadM3u8({
   required Dio dio,
   required SendPort mainSendPort,
 }) async {
+  print('[Isolate] _downloadM3u8: url=${task.url}');
+
   // 解析 M3U8 播放列表
   final (segments, baseUrl) = await _resolveM3u8Playlist(
     task.url,
@@ -1119,12 +1383,20 @@ Future<void> _downloadM3u8({
     task.cancelToken,
   );
 
+  print('[Isolate] M3U8 解析完成: ${segments.length} 个片段');
+
   if (segments.isEmpty) {
     throw Exception('No TS segments found');
   }
 
-  // 创建输出文件
+  // 确保临时目录存在
   final outputFile = File(task.tempFilePath);
+  final parentDir = outputFile.parent;
+  if (!parentDir.existsSync()) {
+    await parentDir.create(recursive: true);
+  }
+
+  // 创建输出文件
   if (outputFile.existsSync()) {
     await outputFile.delete();
   }
@@ -1137,6 +1409,8 @@ Future<void> _downloadM3u8({
   // 创建进度跟踪
   final downloadedSegments = List<bool>.filled(segments.length, false);
 
+  print('[Isolate] 开始下载 ${segments.length} 个片段...');
+
   // 分段并发下载
   for (var i = 0; i < segments.length; i += maxConcurrency) {
     if (task.isPaused || task.isCancelled) break;
@@ -1144,6 +1418,8 @@ Future<void> _downloadM3u8({
     final endIndex = (i + maxConcurrency < segments.length)
         ? i + maxConcurrency
         : segments.length;
+
+    print('[Isolate] 下载批次 $i-${endIndex - 1} / ${segments.length}');
 
     // 并发下载当前批次的片段
     final futures = <Future<_SegmentDownloadResult>>[];
@@ -1161,6 +1437,8 @@ Future<void> _downloadM3u8({
 
     // 等待当前批次完成
     final results = await Future.wait(futures);
+    print(
+        '[Isolate] 批次 $i-${endIndex - 1} 完成，成功 ${results.where((r) => r.success).length}/${results.length}');
 
     // 按顺序写入文件
     final sink = outputFile.openWrite(mode: FileMode.append);
@@ -1184,6 +1462,8 @@ Future<void> _downloadM3u8({
 
     // 发送进度更新
     final progress = endIndex / segments.length;
+    print(
+        '[Isolate] 发送进度: ${(progress * 100).toStringAsFixed(1)}%, 已下载: ${totalDownloadedBytes ~/ 1024} KB');
     mainSendPort.send(_DownloadMessage(
       taskId: task.taskId,
       progress: progress,
@@ -1215,6 +1495,12 @@ Future<_SegmentDownloadResult> _downloadSegment({
   required Map<String, List<int>> keyCache,
 }) async {
   try {
+    // 每 100 个片段打印一次日志，避免日志过多
+    if (index % 100 == 0) {
+      print(
+          '[Isolate] 下载片段 $index: ${segment.url.substring(0, segment.url.length > 50 ? 50 : segment.url.length)}...');
+    }
+
     // 下载密钥（如果需要）
     List<int>? keyBytes;
     if (segment.keyUri != null) {
@@ -1282,11 +1568,19 @@ Future<(List<_HlsSegment>, String)> _resolveM3u8Playlist(
   Map<String, String>? headers,
   CancelToken cancelToken,
 ) async {
+  print('[Isolate] 解析 M3U8: $url');
+
   final res = await dio.get<String>(
     url,
-    options: Options(responseType: ResponseType.plain, headers: headers),
+    options: Options(
+      responseType: ResponseType.plain,
+      headers: headers,
+      receiveTimeout: const Duration(seconds: 30),
+    ),
     cancelToken: cancelToken,
   );
+
+  print('[Isolate] M3U8 内容长度: ${res.data?.length ?? 0}');
 
   final content = res.data!;
   final baseUrl = _getBaseUrl(url);

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:gal/gal.dart';
 import 'package:hive/hive.dart';
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -44,6 +45,13 @@ class DownloadTaskProgressEvent {
 /// 2. Hive 批量写入 - 减少磁盘操作
 /// 3. 内存缓存 - 避免重复计算
 /// 4. Isolate 下载 - 不阻塞 UI
+
+/// 判断 URL 是否为 M3U8 格式
+bool _isM3u8Url(String url) {
+  final lowerUrl = url.toLowerCase();
+  return lowerUrl.contains('.m3u8') || lowerUrl.contains('mpegurl');
+}
+
 class AdvancedDownloadManager extends ChangeNotifier {
   static final AdvancedDownloadManager _instance =
       AdvancedDownloadManager._internal();
@@ -144,6 +152,9 @@ class AdvancedDownloadManager extends ChangeNotifier {
   }
 
   /// 恢复未完成的下载
+  ///
+  /// 注意：此方法只在应用启动时调用一次，用于恢复之前暂停/失败的任务
+  /// 正在下载的任务会被标记为暂停（因为应用重启后下载连接已中断）
   Future<void> _resumeIncompleteTasks() async {
     final incompleteTasks = _tasks.values.where((task) {
       return task.status == DownloadTaskPersistentStatus.downloading ||
@@ -152,7 +163,8 @@ class AdvancedDownloadManager extends ChangeNotifier {
     }).toList();
 
     for (final task in incompleteTasks) {
-      // 将状态更新为暂停（需要用户手动恢复）
+      // 应用启动时，之前的下载连接已经中断
+      // 将正在下载的任务也标记为暂停，用户可以手动恢复
       final updatedTask = task.copyWith(
         status: DownloadTaskPersistentStatus.paused,
       );
@@ -160,6 +172,19 @@ class AdvancedDownloadManager extends ChangeNotifier {
     }
 
     debugPrint('恢复了 ${incompleteTasks.length} 个未完成任务到暂停状态');
+  }
+
+  /// 应用从后台恢复时调用
+  ///
+  /// 与初始化不同，这里不修改任务状态，只检查连接状态
+  Future<void> onAppResumed() async {
+    await initialization;
+
+    // 只通知监听器刷新UI，不修改任何任务状态
+    // 下载任务会在后台继续（如果Isolate还在运行）
+    notifyListeners();
+
+    // 应用恢复
   }
 
   /// 启动统计信息更新
@@ -229,11 +254,29 @@ class AdvancedDownloadManager extends ChangeNotifier {
       if (existingTask.status == DownloadTaskPersistentStatus.completed ||
           existingTask.status == DownloadTaskPersistentStatus.saved) {
         // 已完成任务，返回已存在
+        // 任务已完成
         return existingTask;
       }
       if (existingTask.status == DownloadTaskPersistentStatus.downloading) {
         // 正在下载中
+        // 任务正在下载
         return existingTask;
+      }
+      if (existingTask.status == DownloadTaskPersistentStatus.paused ||
+          existingTask.status == DownloadTaskPersistentStatus.failed) {
+        // 暂停/失败的任务，恢复下载
+        // 恢复已存在任务
+        await startDownload(existingTask.id);
+        return existingTask;
+      }
+      if (existingTask.status == DownloadTaskPersistentStatus.cancelled) {
+        // 已取消的任务，立即从内存和存储中移除，然后创建新任务
+        // 删除已取消任务
+        // 直接清理，不调用 deleteTask 避免异步等待
+        await _taskBox?.delete(existingTask.id);
+        _tasks.remove(existingTask.id);
+        _speedHistory.remove(existingTask.id);
+        _pendingUpdates.remove(existingTask.id);
       }
     }
 
@@ -246,16 +289,16 @@ class AdvancedDownloadManager extends ChangeNotifier {
       final String finalName = _buildFileName(fileName, episodeInfo);
 
       // 处理文件名冲突
-      var targetPath = '${dir.path}/$finalName';
+      var targetPath = path.join(dir.path, finalName);
       var counter = 1;
       final ext = path.extension(finalName);
       final baseName = path.basenameWithoutExtension(finalName);
       while (File(targetPath).existsSync()) {
-        targetPath = '${dir.path}/${baseName}_$counter$ext';
+        targetPath = path.join(dir.path, '${baseName}_$counter$ext');
         counter++;
       }
 
-      final tempFilePath = '${tempDir.path}/${taskId}_$finalName';
+      final tempFilePath = path.join(tempDir.path, '${taskId}_$finalName');
 
       final task = DownloadTaskPersistent(
         id: taskId,
@@ -270,15 +313,12 @@ class AdvancedDownloadManager extends ChangeNotifier {
         headers: headers,
       );
 
-      // 保存到内存和存储
-      await _updateTask(task);
+      // 保存到内存和存储（立即通知UI刷新，显示新任务）
+      await _updateTask(task, immediate: true);
 
       // 如果是普通视频，立即开始下载
       if (type == DownloadTaskType.video) {
         await startDownload(taskId);
-      } else {
-        // 直播流等待用户确认后开始
-        notifyListeners();
       }
 
       return task;
@@ -294,13 +334,13 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
     final task = _tasks[taskId];
     if (task == null) {
-      debugPrint('[下载管理] startDownload: 任务 $taskId 不存在');
+      // 任务不存在
       return;
     }
 
     // 防止重复启动
     if (task.status == DownloadTaskPersistentStatus.downloading) {
-      debugPrint('[下载管理] startDownload: 任务 ${task.fileName} 已在下载中');
+      // 任务已在下载中
       return;
     }
 
@@ -313,7 +353,7 @@ class AdvancedDownloadManager extends ChangeNotifier {
       return;
     }
 
-    debugPrint('[下载管理] startDownload: 开始下载 ${task.fileName}');
+    // 开始下载
 
     if (task.type == DownloadTaskType.liveStream) {
       await _startLiveStreamDownload(task);
@@ -325,23 +365,24 @@ class AdvancedDownloadManager extends ChangeNotifier {
   /// 开始视频下载（普通文件）
   Future<void> _startVideoDownload(DownloadTaskPersistent task) async {
     try {
-      // 更新状态为下载中
+      // 更新状态为下载中（立即通知UI刷新）
       final downloadingTask = task.copyWith(
         status: DownloadTaskPersistentStatus.downloading,
       );
-      await _updateTask(downloadingTask);
+      await _updateTask(downloadingTask, immediate: true);
 
       // 检查是否需要断点续传
       final resumeByte = task.supportsResume && task.downloadedBytes > 0
           ? task.downloadedBytes
           : null;
 
-      // 使用高性能下载服务
+      // 使用高性能下载服务（传入相同的 taskId 确保状态同步）
       final downloadTask = await _downloadService.startDownload(
         url: task.url,
         fileName: task.fileName,
         headers: _buildHeaders(task.headers, resumeByte),
         episodeInfo: task.episodeInfo,
+        externalTaskId: task.id, // 使用相同的 taskId
       );
 
       if (downloadTask == null) {
@@ -372,11 +413,11 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
     _liveStreamControllers[task.id] = controller;
 
-    // 更新状态
+    // 更新状态（立即通知UI刷新）
     final downloadingTask = task.copyWith(
       status: DownloadTaskPersistentStatus.downloading,
     );
-    await _updateTask(downloadingTask);
+    await _updateTask(downloadingTask, immediate: true);
 
     // 开始下载
     await controller.start();
@@ -398,7 +439,7 @@ class AdvancedDownloadManager extends ChangeNotifier {
       final pausedTask = task.copyWith(
         status: DownloadTaskPersistentStatus.paused,
       );
-      await _updateTask(pausedTask);
+      await _updateTask(pausedTask, immediate: true);
     }
   }
 
@@ -408,7 +449,7 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
     final task = _tasks[taskId];
     if (task == null) {
-      debugPrint('[下载管理] resumeDownload: 任务 $taskId 不存在');
+      // 任务不存在
       return;
     }
 
@@ -418,8 +459,35 @@ class AdvancedDownloadManager extends ChangeNotifier {
       return;
     }
 
-    debugPrint('[下载管理] resumeDownload: 恢复下载 ${task.fileName}');
-    await startDownload(taskId);
+    // 恢复下载
+
+    // 使用高性能下载服务的恢复功能
+    if (task.type == DownloadTaskType.video) {
+      // 先更新状态为下载中（立即刷新UI）
+      final downloadingTask = task.copyWith(
+        status: DownloadTaskPersistentStatus.downloading,
+      );
+      await _updateTask(downloadingTask, immediate: true);
+
+      await _downloadService.resumeDownload(
+        taskId: taskId,
+        url: task.url,
+        tempFilePath: task.tempFilePath,
+        isM3u8: _isM3u8Url(task.url),
+        headers: task.headers,
+      );
+
+      // 建立进度监听（恢复下载后需要重新监听）
+      _downloadService.getProgressStream(taskId)?.listen(
+            (event) => _handleDownloadProgress(task.id, event),
+            onError: (Object error) =>
+                _handleDownloadError(task.id, error.toString()),
+            onDone: () => _handleDownloadComplete(task.id),
+          );
+    } else {
+      // 直播流不支持恢复
+      await startDownload(taskId);
+    }
   }
 
   /// 取消下载
@@ -428,11 +496,11 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
     final task = _tasks[taskId];
     if (task == null) {
-      debugPrint('[下载管理] cancelDownload: 任务 $taskId 不存在');
+      // 任务不存在
       return;
     }
 
-    debugPrint('[下载管理] cancelDownload: 取消任务 ${task.fileName}');
+    // 取消任务
 
     if (task.type == DownloadTaskType.liveStream) {
       _liveStreamControllers[taskId]?.stop();
@@ -447,9 +515,9 @@ class AdvancedDownloadManager extends ChangeNotifier {
     final cancelledTask = task.copyWith(
       status: DownloadTaskPersistentStatus.cancelled,
     );
-    await _updateTask(cancelledTask);
+    await _updateTask(cancelledTask, immediate: true);
 
-    debugPrint('[下载管理] cancelDownload: 任务 ${task.fileName} 已取消');
+    // 任务已取消
   }
 
   /// 终止并保存直播流
@@ -475,15 +543,15 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
     final task = _tasks[taskId];
     if (task == null) {
-      debugPrint('[下载管理] deleteTask: 任务 $taskId 不存在');
+      // 任务不存在
       return;
     }
 
-    debugPrint('[下载管理] deleteTask: 删除任务 ${task.fileName} (状态: ${task.status})');
+    // 删除任务
 
     // 如果正在下载，先取消（不触发其他操作）
     if (task.status == DownloadTaskPersistentStatus.downloading) {
-      debugPrint('[下载管理] deleteTask: 任务正在下载，先取消');
+      // 先取消任务
       // 直接调用底层取消，避免触发额外逻辑
       await _downloadService.cancelDownload(taskId);
       _liveStreamControllers[taskId]?.stop();
@@ -498,7 +566,7 @@ class AdvancedDownloadManager extends ChangeNotifier {
       try {
         await File(task.filePath).delete();
       } catch (e) {
-        debugPrint('[下载管理] deleteTask: 删除文件失败: $e');
+        // 删除文件失败
       }
     }
 
@@ -506,7 +574,7 @@ class AdvancedDownloadManager extends ChangeNotifier {
     final progressController = _progressControllers[taskId];
     if (progressController != null && !progressController.isClosed) {
       await progressController.close();
-      debugPrint('[下载管理] deleteTask: 关闭进度流 $taskId');
+      // 关闭进度流
     }
     _progressControllers.remove(taskId);
 
@@ -514,9 +582,10 @@ class AdvancedDownloadManager extends ChangeNotifier {
     await _taskBox?.delete(taskId);
     _tasks.remove(taskId);
     _speedHistory.remove(taskId);
+    _pendingUpdates.remove(taskId);
 
-    // 只通知监听者任务列表变化，不触发任何自动启动逻辑
-    notifyListeners();
+    // 立即刷新并通知
+    await _forceRefresh();
 
     debugPrint(
         '[下载管理] deleteTask: 任务 ${task.fileName} 已删除，剩余任务数: ${_tasks.length}');
@@ -542,10 +611,11 @@ class AdvancedDownloadManager extends ChangeNotifier {
       // 从存储中移除
       await _taskBox?.delete(task.id);
       _tasks.remove(task.id);
+      _pendingUpdates.remove(task.id);
     }
 
     if (completedTasks.isNotEmpty) {
-      notifyListeners();
+      await _forceRefresh();
     }
 
     return completedTasks.length;
@@ -568,7 +638,7 @@ class AdvancedDownloadManager extends ChangeNotifier {
       downloadedBytes: task.supportsResume ? task.downloadedBytes : 0,
       progress: task.supportsResume ? task.progress : 0.0,
     );
-    await _updateTask(resetTask);
+    await _updateTask(resetTask, immediate: true);
 
     // 重新开始下载
     await startDownload(taskId);
@@ -579,6 +649,11 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
   /// 获取所有任务
   List<DownloadTaskPersistent> getAllTasks() => _tasks.values.toList();
+
+  /// 获取活动（正在下载）的任务
+  List<DownloadTaskPersistent> get activeTasks => _tasks.values
+      .where((task) => task.status == DownloadTaskPersistentStatus.downloading)
+      .toList();
 
   /// 获取任务流
   Stream<DownloadTaskProgressEvent>? getTaskProgressStream(String taskId) {
@@ -591,8 +666,13 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
   /// 处理下载进度（带节流）
   void _handleDownloadProgress(String taskId, DownloadProgressEvent event) {
+    // 处理进度
+
     final task = _tasks[taskId];
-    if (task == null) return;
+    if (task == null) {
+      // 错误: 任务不存在
+      return;
+    }
 
     // 取消之前的节流定时器
     _throttleTimers[taskId]?.cancel();
@@ -616,7 +696,8 @@ class AdvancedDownloadManager extends ChangeNotifier {
       status: status,
     );
 
-    _updateTaskWithoutNotify(updatedTask);
+    // 更新任务并通知UI（使用节流）
+    _updateTask(updatedTask);
 
     // 通知进度流（使用节流，每100ms最多一次）
     _throttleTimers[taskId] = Timer(const Duration(milliseconds: 100), () {
@@ -687,7 +768,10 @@ class AdvancedDownloadManager extends ChangeNotifier {
       downloadSpeed: 0,
       remainingSeconds: 0,
     );
-    await _updateTask(completedTask);
+    await _updateTask(completedTask, immediate: true);
+
+    // 扫描媒体文件，使其出现在相册中
+    await _scanMediaFile(task.filePath);
 
     _progressControllers[taskId]?.add(DownloadTaskProgressEvent(
       taskId: taskId,
@@ -709,7 +793,10 @@ class AdvancedDownloadManager extends ChangeNotifier {
       status: DownloadTaskPersistentStatus.saved,
       downloadSpeed: 0,
     );
-    await _updateTask(savedTask);
+    await _updateTask(savedTask, immediate: true);
+
+    // 扫描媒体文件，使其出现在相册中
+    await _scanMediaFile(task.filePath);
 
     _progressControllers[taskId]?.add(DownloadTaskProgressEvent(
       taskId: taskId,
@@ -732,7 +819,7 @@ class AdvancedDownloadManager extends ChangeNotifier {
       errorMessage: error,
       downloadSpeed: 0,
     );
-    await _updateTask(failedTask);
+    await _updateTask(failedTask, immediate: true);
 
     _progressControllers[taskId]?.add(DownloadTaskProgressEvent(
       taskId: taskId,
@@ -774,14 +861,27 @@ class AdvancedDownloadManager extends ChangeNotifier {
   }
 
   /// 更新任务（通知监听器）
-  Future<void> _updateTask(DownloadTaskPersistent task) async {
+  ///
+  /// 状态变化时立即通知，进度更新时节流
+  Future<void> _updateTask(
+    DownloadTaskPersistent task, {
+    bool immediate = false,
+  }) async {
     _tasks[task.id] = task;
     _pendingUpdates[task.id] = task;
     _startBatchWriteTimer();
 
-    // 节流通知，最多每100ms一次
+    // 状态变化时立即通知，进度更新时节流
     final now = DateTime.now();
-    if (now.difference(_lastNotifyTime).inMilliseconds >= 100) {
+    final timeSinceLastNotify = now.difference(_lastNotifyTime).inMilliseconds;
+
+    // 立即通知条件：
+    // 1. immediate 参数为 true
+    // 2. 状态变化（非下载中状态）
+    // 3. 距离上次通知超过 100ms
+    if (immediate ||
+        task.status != DownloadTaskPersistentStatus.downloading ||
+        timeSinceLastNotify >= 100) {
       _lastNotifyTime = now;
       notifyListeners();
     }
@@ -792,6 +892,18 @@ class AdvancedDownloadManager extends ChangeNotifier {
     _tasks[task.id] = task;
     _pendingUpdates[task.id] = task;
     _startBatchWriteTimer();
+  }
+
+  /// 强制刷新 - 立即写入并通知
+  ///
+  /// 在关键操作（如暂停、恢复、删除）后调用，确保UI立即更新
+  Future<void> _forceRefresh() async {
+    // 立即刷新待更新任务
+    await _flushPendingUpdates();
+
+    // 立即通知
+    _lastNotifyTime = DateTime.now();
+    notifyListeners();
   }
 
   /// 启动批量写入定时器
@@ -812,6 +924,28 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
     // 批量写入
     await _taskBox?.putAll(updates);
+  }
+
+  /// 保存视频到系统相册
+  ///
+  /// 使用 gal 包自动处理各平台的媒体保存
+  /// - Android: 保存到 Pictures/Movies 并触发 MediaScanner
+  /// - iOS: 保存到 Photos 相册
+  Future<void> _scanMediaFile(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!file.existsSync()) {
+        // 文件不存在
+        return;
+      }
+
+      // 使用 gal 包保存到相册
+      await Gal.putVideo(filePath);
+      // 已保存到相册
+    } catch (e) {
+      // gal 包可能会抛出权限异常等，捕获但不影响下载流程
+      // 保存到相册失败
+    }
   }
 
   /// 通过URL查找任务
@@ -885,7 +1019,7 @@ class AdvancedDownloadManager extends ChangeNotifier {
 
     dir ??= await getApplicationDocumentsDirectory();
 
-    final moonTVDir = Directory('${dir.path}/MoonTV');
+    final moonTVDir = Directory(path.join(dir.path, 'MoonTV'));
     if (!moonTVDir.existsSync()) {
       await moonTVDir.create(recursive: true);
     }
@@ -895,7 +1029,8 @@ class AdvancedDownloadManager extends ChangeNotifier {
   /// 获取临时目录
   Future<Directory> _getTempDirectory() async {
     final tempDir = await getTemporaryDirectory();
-    final downloadTempDir = Directory('${tempDir.path}/selene_downloads');
+    final downloadTempDir =
+        Directory(path.join(tempDir.path, 'selene_downloads'));
     if (!downloadTempDir.existsSync()) {
       await downloadTempDir.create(recursive: true);
     }

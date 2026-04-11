@@ -487,8 +487,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       _currentHeaders = headers;
     }
 
-    // 取消之前的下载
-    await _cancelDownload();
+    // 注意：切换视频时不自动取消下载，让之前的下载在后台继续
 
     // 如果播放器未初始化，先初始化
     if (_player == null) {
@@ -594,8 +593,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     if (_playerDisposed) {
       return;
     }
-    // 取消下载
-    await _cancelDownload();
+    // 注意：不要在播放器 dispose 时取消下载，让下载在后台继续
 
     await _disposePlayer();
   }
@@ -789,11 +787,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
 
   /// 在 dispose 时清理下载资源（不调用 setState）
   void _disposeDownload() {
-    if (_downloadInfo.taskId == null) return;
-
-    // 取消下载（会删除临时文件）- 不等待完成，避免阻塞 dispose
-    final downloadManager = AdvancedDownloadManager();
-    unawaited(downloadManager.cancelDownload(_downloadInfo.taskId!));
+    // 注意：不要在播放器 dispose 时取消下载，让下载在后台继续
+    // 取消订阅即可
   }
 
   Future<String?> _saveAs() async {
