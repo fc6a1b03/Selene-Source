@@ -401,7 +401,7 @@ class _DownloadManagerScreenState extends State<DownloadManagerScreen>
         icon = LucideIcons.loader;
       case DownloadFilter.completed:
         message = '没有已完成的任务';
-        icon = LucideIcons.checkCircle;
+        icon = LucideIcons.circleCheck;
     }
 
     return Center(

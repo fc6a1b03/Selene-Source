@@ -921,7 +921,7 @@ class _UserMenuState extends State<UserMenu> {
                           child: Row(
                             children: [
                               Icon(
-                                LucideIcons.downloadCloud,
+                                LucideIcons.cloudDownload,
                                 size: 20,
                                 color: widget.isDarkMode
                                     ? const Color(0xFF3b82f6)
