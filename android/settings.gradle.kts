@@ -49,6 +49,15 @@ dependencyResolutionManagement {
     }
 }
 
+// 读取 NDK 版本
+val ndkVersionFromToml = run {
+    val versionCatalogFile = file("gradle/libs.versions.toml")
+    val versionPattern = Regex("""ndkVersion\s*=\s*"([^"]+)""")
+    versionCatalogFile.readLines()
+        .firstNotNullOfOrNull { versionPattern.find(it)?.groupValues?.get(1) }
+        ?: throw IllegalStateException("ndkVersion not found in libs.versions.toml")
+}
+
 plugins {
     id("dev.flutter.flutter-plugin-loader")
     id("com.android.application") apply false
@@ -56,3 +65,12 @@ plugins {
 }
 
 include(":app")
+
+// 统一设置所有子项目的 NDK 版本
+gradle.afterProject {
+    if (project.hasProperty("android")) {
+        project.extensions.configure<com.android.build.gradle.BaseExtension> {
+            ndkVersion = ndkVersionFromToml
+        }
+    }
+}

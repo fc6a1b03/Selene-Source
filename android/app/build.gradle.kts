@@ -23,6 +23,7 @@ android {
         afterEvaluate {
             if (hasProperty("android")) {
                 extensions.configure<com.android.build.gradle.BaseExtension> {
+                    ndkVersion = libs.versions.ndkVersion.get()
                     compileOptions {
                         isCoreLibraryDesugaringEnabled = true
                         sourceCompatibility = JavaVersion.toVersion(libs.versions.java.get())
